@@ -5,5 +5,5 @@ use crate::parsor::sql_token_types::SQLTokenTypes;
 pub struct Token {
     pub token_type: SQLTokenTypes,
     pub lexeme: String,
-    pub literal: dyn Any,
+    pub literal: Option<Box<dyn Any>>,
 }
