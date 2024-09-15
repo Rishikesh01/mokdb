@@ -1,4 +1,4 @@
-mod parsor;
+mod parser;
 
 fn main() {
     println!("Hello, world!");
