@@ -17,6 +17,7 @@ pub enum SQLTokenTypes {
     SAVEPOINT,
     TABLE_IDENTIFIER,
     IDENTIFIER,
+    NUMBER,
     EOF,
 
     //other
