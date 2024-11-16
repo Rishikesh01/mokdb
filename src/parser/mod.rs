@@ -1,11 +1,10 @@
-use std::vec;
-
+#![allow(dead_code, clippy::needless_return)]
 use self::{
     ast::{
         Assignment, ColumnConstraint, ColumnDefinition, ComparisonCondition, ComparisonOperator,
         Condition, CreateStatement, DataType, DropStatement, Expression, InsertStatement, Literal,
-        LogicalCondition, LogicalOperator, SQLStatement, SelectColumn, SelectStatement,
-        WhereClause,
+        LogicalCondition, LogicalOperator, NullCheckCondition, SQLStatement, SelectColumn,
+        SelectStatement, WhereClause,
     },
     scanner::Scanner,
     sql_token_types::SQLTokenTypes,
@@ -31,43 +30,43 @@ impl Parser {
 
     pub fn parse(&mut self) -> Result<SQLStatement, String> {
         match self.peek().token_type {
-            SQLTokenTypes::SELECT => self.select_statement(),
-            SQLTokenTypes::INSERT => self.insert_statement(),
-            SQLTokenTypes::UPDATE => self.update_statement(),
-            SQLTokenTypes::DELETE => self.delete_statement(),
-            SQLTokenTypes::CREATE => self.create_statement(),
-            SQLTokenTypes::DROP => self.drop_statement(),
+            SQLTokenTypes::Select => self.select_statement(),
+            SQLTokenTypes::Insert => self.insert_statement(),
+            SQLTokenTypes::Update => self.update_statement(),
+            SQLTokenTypes::Delete => self.delete_statement(),
+            SQLTokenTypes::Create => self.create_statement(),
+            SQLTokenTypes::Drop => self.drop_statement(),
             _ => Err("Unexpected statement type".to_string()),
         }
     }
 
     fn select_statement(&mut self) -> Result<SQLStatement, String> {
-        self.advance();
+        self.consume(SQLTokenTypes::Select, "expected select keyword")?;
         let mut columns = Vec::new();
         loop {
-            if self.check(SQLTokenTypes::STAR) {
-                self.advance();
+            if self.check(SQLTokenTypes::Star) {
+                self.consume(SQLTokenTypes::Star, "expected *")?;
                 columns.push(SelectColumn::All);
                 break;
-            } else if self.check(SQLTokenTypes::IDENTIFIER) {
+            } else if self.check(SQLTokenTypes::Identifier) {
                 columns.push(SelectColumn::Column(self.advance().lexeme.clone()));
             } else {
                 return Err("Expected column name or *".to_string());
             }
 
-            if !self.match_token(SQLTokenTypes::COMMA) {
+            if !self.match_token(SQLTokenTypes::Comma) {
                 break;
             }
         }
 
-        self.consume(SQLTokenTypes::FROM, "Expect FROM after select columns")?;
-        let from = if self.check(SQLTokenTypes::IDENTIFIER) {
+        self.consume(SQLTokenTypes::From, "Expect FROM after select columns")?;
+        let from = if self.check(SQLTokenTypes::Identifier) {
             Some(self.advance().lexeme.clone())
         } else {
             return Err("Expected table name after FROM".to_string());
         };
 
-        let where_clause = if self.match_token(SQLTokenTypes::WHERE) {
+        let where_clause = if self.match_token(SQLTokenTypes::Where) {
             Some(self.where_clause()?)
         } else {
             None
@@ -81,23 +80,23 @@ impl Parser {
     }
 
     fn insert_statement(&mut self) -> Result<SQLStatement, String> {
-        self.consume(SQLTokenTypes::INSERT, "Expect INSERT")?;
-        self.consume(SQLTokenTypes::INTO, "Expect INTO after INSERT")?;
+        self.consume(SQLTokenTypes::Insert, "Expect INSERT")?;
+        self.consume(SQLTokenTypes::Into, "Expect INTO after INSERT")?;
         let table = self
-            .consume(SQLTokenTypes::IDENTIFIER, "Expect table name")?
+            .consume(SQLTokenTypes::Identifier, "Expect table name")?
             .lexeme
             .clone();
 
-        let columns = if self.match_token(SQLTokenTypes::LEFTPAREN) {
+        let columns = if self.match_token(SQLTokenTypes::Leftparen) {
             self.parse_column_list()?
         } else {
             Vec::new()
         };
 
-        self.consume(SQLTokenTypes::VALUES, "Expect VALUES")?;
-        self.consume(SQLTokenTypes::LEFTPAREN, "Expect ( after VALUES")?;
+        self.consume(SQLTokenTypes::Values, "Expect VALUES")?;
+        self.consume(SQLTokenTypes::Leftparen, "Expect ( after VALUES")?;
         let values = self.parse_expression_list()?;
-        self.consume(SQLTokenTypes::RIGHTPAREN, "Expect ) after values")?;
+        self.consume(SQLTokenTypes::Rightparen, "Expect ) after values")?;
 
         Ok(SQLStatement::Insert(InsertStatement {
             table,
@@ -107,21 +106,18 @@ impl Parser {
     }
 
     fn update_statement(&mut self) -> Result<SQLStatement, String> {
-        self.consume(SQLTokenTypes::UPDATE, "Expect UPDATE")?;
+        self.consume(SQLTokenTypes::Update, "Expect UPDATE")?;
         let table = self
-            .consume(SQLTokenTypes::IDENTIFIER, "Expect table name")?
+            .consume(SQLTokenTypes::Identifier, "Expect table name")?
             .lexeme
             .clone();
-        self.consume(SQLTokenTypes::SET, "Expect SET after table name")?;
+        self.consume(SQLTokenTypes::Set, "Expect SET after table name")?;
 
         let assignments = self.parse_assignments()?;
 
-        let where_clause = if self.match_token(SQLTokenTypes::WHERE) {
-            Some(WhereClause {
-                condition: self.condition()?,
-            })
-        } else {
-            None
+        let where_clause = match self.match_token(SQLTokenTypes::Where) {
+            true => Some(self.where_clause()?),
+            false => None,
         };
 
         Ok(SQLStatement::Update(ast::UpdateStatement {
@@ -132,17 +128,15 @@ impl Parser {
     }
 
     fn delete_statement(&mut self) -> Result<SQLStatement, String> {
-        self.consume(SQLTokenTypes::DELETE, "Expect DELETE")?;
-        self.consume(SQLTokenTypes::FROM, "Expect FROM after DELETE")?;
+        self.consume(SQLTokenTypes::Delete, "Expect DELETE")?;
+        self.consume(SQLTokenTypes::From, "Expect FROM after DELETE")?;
         let table = self
-            .consume(SQLTokenTypes::IDENTIFIER, "Expect table name")?
+            .consume(SQLTokenTypes::Identifier, "Expect table name")?
             .lexeme
             .clone();
 
-        let where_clause = if self.match_token(SQLTokenTypes::WHERE) {
-            Some(WhereClause {
-                condition: self.condition()?,
-            })
+        let where_clause = if self.match_token(SQLTokenTypes::Where) {
+            Some(self.where_clause()?)
         } else {
             None
         };
@@ -154,17 +148,17 @@ impl Parser {
     }
 
     fn create_statement(&mut self) -> Result<SQLStatement, String> {
-        self.consume(SQLTokenTypes::CREATE, "Expect CREATE")?;
-        self.consume(SQLTokenTypes::TABLE, "Expect TABLE after CREATE")?;
+        self.consume(SQLTokenTypes::Create, "Expect CREATE")?;
+        self.consume(SQLTokenTypes::Table, "Expect TABLE after CREATE")?;
         let table = self
-            .consume(SQLTokenTypes::IDENTIFIER, "Expect table name")?
+            .consume(SQLTokenTypes::Identifier, "Expect table name")?
             .lexeme
             .clone();
 
-        self.consume(SQLTokenTypes::LEFTPAREN, "Expect ( after table name")?;
+        self.consume(SQLTokenTypes::Leftparen, "Expect ( after table name")?;
         let columns = self.parse_column_definitions()?;
         self.consume(
-            SQLTokenTypes::RIGHTPAREN,
+            SQLTokenTypes::Rightparen,
             "Expect ) after column definitions",
         )?;
 
@@ -172,197 +166,164 @@ impl Parser {
     }
 
     fn drop_statement(&mut self) -> Result<SQLStatement, String> {
-        self.consume(SQLTokenTypes::DROP, "Expect DROP")?;
-        self.consume(SQLTokenTypes::TABLE, "Expect TABLE after DROP")?;
+        self.consume(SQLTokenTypes::Drop, "Expect DROP")?;
+        self.consume(SQLTokenTypes::Table, "Expect TABLE after DROP")?;
         let table = self
-            .consume(SQLTokenTypes::IDENTIFIER, "Expect table name")?
+            .consume(SQLTokenTypes::Identifier, "Expect table name")?
             .lexeme
             .clone();
 
         Ok(SQLStatement::Drop(DropStatement { table }))
     }
 
-    fn condition(&mut self) -> Result<Condition, String> {
-        let mut condition = self.comparison()?;
+    // The entry point for parsing the WHERE clause
+    // WHERE foo = 'bar'
+    // WHERE foo = 'bar' AND fuzz = 'fuzz0'
+    // WHERE (foo = 'bar' AND fuzz = 'fuzz0') OR (foo = 'baz' AND fuz = 'dazz')
+    // WHERE (foo = 'bar' AND fuzz = 'fuzz0') OR (foo = 'baz' AND fuz = 'dazz')
+    // WHERE ((foo = 'bar' AND fuzz = 'fuzz0') OR (foo = 'baz' AND fuz = 'dazz')) AND (IS_ACTIVE AND IS_ENABLED))
+    // WHERE ((foo = 'bar' AND fuzz = 'fuzz0') OR (foo = 'baz' AND fuz = 'dazz')) AND (IS_ACTIVE = FALSE AND IS_ENABLED))
+    // WHERE IS_ACTIVE = FALSE AND IS_ENABLED
+    // WHERE foo = 'bar' AND IS_ACTIVE
+    fn where_clause(&mut self) -> Result<WhereClause, String> {
+        let condition = self.parse_or_condition()?;
+        Ok(WhereClause { condition })
+    }
 
-        while self.match_token(SQLTokenTypes::AND) || self.match_token(SQLTokenTypes::OR) {
-            let operator = match self.previous().token_type {
-                SQLTokenTypes::AND => LogicalOperator::And,
-                SQLTokenTypes::OR => LogicalOperator::Or,
-                _ => unreachable!(),
-            };
-            let right = self.comparison()?;
-            condition = Condition::Logical(LogicalCondition {
-                left: Box::new(condition),
-                operator,
+    fn parse_or_condition(&mut self) -> Result<Condition, String> {
+        let mut left = self.parse_and_condition()?;
+        while self.check(SQLTokenTypes::OR) {
+            self.consume(SQLTokenTypes::OR, "Expected 'OR' operator")?;
+            let right = self.parse_and_condition()?;
+            left = Condition::Logical(LogicalCondition {
+                operator: LogicalOperator::Or,
+                left: Box::new(left),
                 right: Box::new(right),
             });
         }
 
-        Ok(condition)
+        Ok(left)
     }
 
-    fn where_clause(&mut self) -> Result<WhereClause, String> {
-        let mut stack: Vec<Condition> = Vec::new();
-        let mut balanced_parenthesis = Vec::new();
-        let mut current_condition: Option<Condition> = None;
+    fn parse_and_condition(&mut self) -> Result<Condition, String> {
+        let mut left = self.parse_primary_condition()?;
 
-        while self.has_more_tokens() {
-            if self.check(SQLTokenTypes::LEFTPAREN) {
-                self.advance();
-                balanced_parenthesis.push("(");
-                continue;
-            }
-
-            if self.check(SQLTokenTypes::IDENTIFIER) {
-                let left = Expression::Identifier(self.advance().lexeme.clone());
-
-                let operator = match self.advance().token_type {
-                    SQLTokenTypes::EQUAL => ComparisonOperator::Equal,
-                    SQLTokenTypes::GREATER => ComparisonOperator::GreaterThan,
-                    SQLTokenTypes::LESSER => ComparisonOperator::LessThan,
-                    SQLTokenTypes::GREATER_OR_EQUAL => ComparisonOperator::GreaterThanOrEqual,
-                    SQLTokenTypes::LESSER_OR_EQUAL => ComparisonOperator::LessThanOrEqual,
-                    SQLTokenTypes::NOT_EQUAL => ComparisonOperator::NotEqual,
-                    _ => return Err("Expected comparison operator in WHERE clause".to_string()),
-                };
-
-                let right = if self.check(SQLTokenTypes::IDENTIFIER) {
-                    Expression::Identifier(self.advance().lexeme.clone())
-                } else if self.check(SQLTokenTypes::NUMBER) {
-                    let lexeme = self.advance().lexeme.clone();
-                    match lexeme.parse::<f64>() {
-                        Ok(number) => Expression::Literal(Literal::Number(number)),
-                        Err(_) => return Err(format!("Failed to parse number: {}", lexeme)),
-                    }
-                } else if self.check(SQLTokenTypes::STRING) {
-                    Expression::Literal(Literal::String(self.advance().lexeme.clone()))
-                } else {
-                    return Err("Expected value in WHERE clause".to_string());
-                };
-
-                current_condition = Some(Condition::Comparison(ComparisonCondition {
-                    left,
-                    operator,
-                    right,
-                }));
-
-                if self.check(SQLTokenTypes::AND) || self.check(SQLTokenTypes::OR) {
-                    let logical_operator = self.advance().token_type;
-                    if let Some(condition) = current_condition.take() {
-                        stack.push(condition);
-                    }
-
-                    let logical_condition = Condition::Logical(LogicalCondition {
-                        left: Box::new(
-                            stack
-                                .pop()
-                                .ok_or("No condition to apply logical operator")?,
-                        ),
-                        operator: match logical_operator {
-                            SQLTokenTypes::AND => LogicalOperator::And,
-                            SQLTokenTypes::OR => LogicalOperator::Or,
-                            _ => unreachable!(),
-                        },
-                        right: Box::new(Condition::Comparison(ComparisonCondition {
-                            // Placeholder; this will need to be correctly populated
-                            left: Expression::Identifier("logical_condition".to_string()), // Placeholder
-                            operator: ComparisonOperator::Equal, // Placeholder
-                            right: Expression::Identifier("logical_condition".to_string()), // Placeholder
-                        })),
-                    });
-                    stack.push(logical_condition); // Push logical condition back onto stack
-                }
-                current_condition = None; // Reset for the next condition
-            } else if self.check(SQLTokenTypes::RIGHTPAREN) {
-                self.advance(); // Consume ')'
-                balanced_parenthesis.pop(); // Track closing parenthesis
-                if let Some(condition) = current_condition.take() {
-                    stack.push(condition); // Push the last condition before closing parenthesis
-                }
-            } else if self.check(SQLTokenTypes::SELECT) {
-                // If we encounter SELECT, handle it as a subquery
-                let subquery = self.parse_subquery()?;
-                current_condition = Some(Condition::Comparison(ComparisonCondition {
-                    left: Expression::Identifier("subquery_result".to_string()), // Placeholder
-                    operator: ComparisonOperator::Equal,                         // Adjust as needed
-                    right: subquery,
-                }));
-            } else {
-                break; // No more valid tokens to process
-            }
+        while self.check(SQLTokenTypes::And) {
+            self.consume(SQLTokenTypes::And, "Expected 'AND' operator")?;
+            let right = self.parse_primary_condition()?;
+            left = Condition::Logical(LogicalCondition {
+                operator: LogicalOperator::And,
+                left: Box::new(left),
+                right: Box::new(right),
+            });
         }
 
-        // Ensure all parentheses are balanced
-        if !balanced_parenthesis.is_empty() {
-            return Err("Unbalanced parentheses in WHERE clause".to_string());
-        }
-
-        // Final condition assembly
-        let final_condition = if !stack.is_empty() {
-            Some(stack.pop().unwrap()) // Pop the last condition from the stack
-        } else {
-            None
-        };
-
-        Ok(WhereClause {
-            condition: match final_condition {
-                Some(cond) => vec![cond],
-                None => vec![], // No conditions found
-            },
-        })
+        Ok(left)
     }
 
-    // Function to parse a subquery
-    fn parse_subquery(&mut self) -> Result<Expression, String> {
-        self.advance(); // Consume 'SELECT'
-                        // Here we would need to parse the select statement
-        let select_statement = self.select_statement()?;
-
-        // Return the subquery as an expression
-        // This can be structured based on how you want to handle subqueries in your AST
-        Ok(Expression::Identifier("subquery_result".to_string())) // Placeholder for the result
-    }
-
-    fn has_more_tokens(self) -> bool {
-        return self.current < self.tokens.len();
-    }
-
-    fn comparison(&mut self) -> Result<Condition, String> {
-        if self.match_token(SQLTokenTypes::NOT) {
-            let condition = self.comparison()?;
+    fn parse_primary_condition(&mut self) -> Result<Condition, String> {
+        if self.check(SQLTokenTypes::Not) {
+            // Handle NOT operator
+            self.consume(SQLTokenTypes::Not, "Expected 'NOT' operator")?;
+            let condition = self.parse_primary_condition()?; // Recursively parse the condition after NOT
             return Ok(Condition::Not(Box::new(condition)));
         }
 
-        let left = self.expression()?;
+        if self.check(SQLTokenTypes::Leftparen) {
+            // Handle grouped conditions or subqueries.
+            self.consume(SQLTokenTypes::Leftparen, "Expected '('")?;
+            let condition = self.parse_or_condition()?;
+            self.consume(SQLTokenTypes::Rightparen, "Expected ')'")?;
+            return Ok(condition);
+        }
 
-        let operator = match self.advance().token_type {
-            SQLTokenTypes::EQUAL => ComparisonOperator::Equal,
-            SQLTokenTypes::GREATER => ComparisonOperator::GreaterThan,
-            SQLTokenTypes::LESSER => ComparisonOperator::LessThan,
-            SQLTokenTypes::GREATER_EQUAL => ComparisonOperator::GreaterThanOrEqual,
-            SQLTokenTypes::LESSER_EQUAL => ComparisonOperator::LessThanOrEqual,
-            SQLTokenTypes::NOT_EQUAL => ComparisonOperator::NotEqual,
-            _ => return Err("Expected comparison operator".to_string()),
-        };
+        self.parse_comparison_condition()
+    }
 
-        let right = self.expression()?;
+    fn parse_comparison_condition(&mut self) -> Result<Condition, String> {
+        if self.check(SQLTokenTypes::Identifier) {
+            let left = self.peek().lexeme.clone();
+            self.consume(SQLTokenTypes::Identifier, "expected an identifier")?;
 
-        Ok(Condition::Comparison(ComparisonCondition {
-            left,
-            operator,
-            right,
-        }))
+            if self.check(SQLTokenTypes::Equal)
+                || self.check(SQLTokenTypes::GreaterThanOrEqualTo)
+                || self.check(SQLTokenTypes::LesserThanOrEqualTo)
+                || self.check(SQLTokenTypes::Lesser)
+                || self.check(SQLTokenTypes::Greater)
+            {
+                let operator = match self.peek().token_type {
+                    SQLTokenTypes::NotEqual => ComparisonOperator::NotEqual,
+                    SQLTokenTypes::Equal => ComparisonOperator::Equal,
+                    SQLTokenTypes::GreaterThanOrEqualTo => ComparisonOperator::GreaterThanOrEqual,
+                    SQLTokenTypes::LesserThanOrEqualTo => ComparisonOperator::LessThanOrEqual,
+                    SQLTokenTypes::Lesser => ComparisonOperator::LessThan,
+                    SQLTokenTypes::Greater => ComparisonOperator::GreaterThan,
+                    _ => {
+                        return Err(
+                            "unexpected token found, expected comparison operator".to_string()
+                        )
+                    }
+                };
+
+                self.consume(
+                    self.peek().token_type.clone(),
+                    "expected comparison operator",
+                )?;
+
+                // Ensure the right-hand side is a valid literal (string, number, or boolean).
+                let right = self.expression()?;
+
+                return Ok(Condition::Comparison(ComparisonCondition {
+                    operator,
+                    left: Expression::Identifier(left),
+                    right,
+                }));
+            } else if self.check(SQLTokenTypes::Null)
+                || self.check(SQLTokenTypes::IS)
+                || self.check(SQLTokenTypes::Not)
+            {
+                if self.check(SQLTokenTypes::IS) {
+                    self.consume(SQLTokenTypes::IS, "expected IS operator")?;
+                    if self.check(SQLTokenTypes::Not) {
+                        self.consume(SQLTokenTypes::Not, "expected NOT operator")?;
+                        if self.check(SQLTokenTypes::Null) {
+                            self.consume(SQLTokenTypes::Null, "expected NULL operator")?;
+                            return Ok(Condition::NullCheck(NullCheckCondition::IsNotNull {
+                                identifier: left,
+                            }));
+                        }
+                    }
+                    if self.check(SQLTokenTypes::Null) {
+                        self.consume(SQLTokenTypes::Null, "expected NULL operator")?;
+                        return Ok(Condition::NullCheck(NullCheckCondition::IsNull {
+                            identifier: left,
+                        }));
+                    }
+
+                    return Err("unexpected token found".to_string());
+                }
+                return Err("unexpected token found".to_string());
+            } else {
+                // If no comparison operator, treat the identifier as a boolean condition (i.e., equals true).
+                return Ok(Condition::Comparison(ComparisonCondition {
+                    operator: ComparisonOperator::Equal,
+                    left: Expression::Identifier(left),
+                    right: Expression::Literal(Literal::Boolean(true)),
+                }));
+            }
+        }
+
+        Err("Expected identifier on the left-hand side of the comparison.".to_string())
     }
 
     fn expression(&mut self) -> Result<Expression, String> {
-        if self.check(SQLTokenTypes::IDENTIFIER) {
+        if self.check(SQLTokenTypes::Identifier) {
             Ok(Expression::Identifier(self.advance().lexeme.clone()))
-        } else if self.check(SQLTokenTypes::STRING) {
+        } else if self.check(SQLTokenTypes::String) {
             Ok(Expression::Literal(Literal::String(
                 self.advance().lexeme.clone(),
             )))
-        } else if self.check(SQLTokenTypes::NUMBER) {
+        } else if self.check(SQLTokenTypes::Number) {
             let number: f64 = self
                 .advance()
                 .lexeme
@@ -378,15 +339,15 @@ impl Parser {
         let mut columns = Vec::new();
         loop {
             columns.push(
-                self.consume(SQLTokenTypes::IDENTIFIER, "Expect column name")?
+                self.consume(SQLTokenTypes::Identifier, "Expect column name")?
                     .lexeme
                     .clone(),
             );
-            if !self.match_token(SQLTokenTypes::COMMA) {
+            if !self.match_token(SQLTokenTypes::Comma) {
                 break;
             }
         }
-        self.consume(SQLTokenTypes::RIGHTPAREN, "Expect ) after column list")?;
+        self.consume(SQLTokenTypes::Rightparen, "Expect ) after column list")?;
         Ok(columns)
     }
 
@@ -394,7 +355,7 @@ impl Parser {
         let mut expressions = Vec::new();
         loop {
             expressions.push(self.expression()?);
-            if !self.match_token(SQLTokenTypes::COMMA) {
+            if !self.match_token(SQLTokenTypes::Comma) {
                 break;
             }
         }
@@ -405,13 +366,13 @@ impl Parser {
         let mut assignments = Vec::new();
         loop {
             let column = self
-                .consume(SQLTokenTypes::IDENTIFIER, "Expect column name")?
+                .consume(SQLTokenTypes::Identifier, "Expect column name")?
                 .lexeme
                 .clone();
-            self.consume(SQLTokenTypes::EQUAL, "Expect = after column name")?;
+            self.consume(SQLTokenTypes::Equal, "Expect = after column name")?;
             let value = self.expression()?;
             assignments.push(Assignment { column, value });
-            if !self.match_token(SQLTokenTypes::COMMA) {
+            if !self.match_token(SQLTokenTypes::Comma) {
                 break;
             }
         }
@@ -422,7 +383,7 @@ impl Parser {
         let mut columns = Vec::new();
         loop {
             let name = self
-                .consume(SQLTokenTypes::IDENTIFIER, "Expect column name")?
+                .consume(SQLTokenTypes::Identifier, "Expect column name")?
                 .lexeme
                 .clone();
             let data_type = self.parse_data_type()?;
@@ -432,7 +393,7 @@ impl Parser {
                 data_type,
                 constraints,
             });
-            if !self.match_token(SQLTokenTypes::COMMA) {
+            if !self.match_token(SQLTokenTypes::Comma) {
                 break;
             }
         }
@@ -441,20 +402,20 @@ impl Parser {
 
     fn parse_data_type(&mut self) -> Result<DataType, String> {
         let type_name = self
-            .consume(SQLTokenTypes::IDENTIFIER, "Expect data type")?
+            .consume(SQLTokenTypes::Identifier, "Expect data type")?
             .lexeme
             .to_uppercase();
         match type_name.as_str() {
             "INTEGER" => Ok(DataType::Integer),
             "FLOAT" => Ok(DataType::Float),
             "VARCHAR" => {
-                if self.match_token(SQLTokenTypes::LEFTPAREN) {
+                if self.match_token(SQLTokenTypes::Leftparen) {
                     let size = self
-                        .consume(SQLTokenTypes::NUMBER, "Expect size for VARCHAR")?
+                        .consume(SQLTokenTypes::Number, "Expect size for VARCHAR")?
                         .lexeme
                         .parse()
                         .map_err(|_| "Invalid VARCHAR size".to_string())?;
-                    self.consume(SQLTokenTypes::RIGHTPAREN, "Expect ) after VARCHAR size")?;
+                    self.consume(SQLTokenTypes::Rightparen, "Expect ) after VARCHAR size")?;
                     Ok(DataType::Varchar(Some(size)))
                 } else {
                     Ok(DataType::Varchar(None))
@@ -467,21 +428,24 @@ impl Parser {
 
     fn parse_column_constraints(&mut self) -> Result<Vec<ColumnConstraint>, String> {
         let mut constraints = Vec::new();
-        while self.match_token(SQLTokenTypes::PRIMARY)
-            || self.match_token(SQLTokenTypes::NOT)
-            || self.match_token(SQLTokenTypes::UNIQUE)
+        while self.match_token(SQLTokenTypes::Primary)
+            || self.match_token(SQLTokenTypes::Not)
+            || self.match_token(SQLTokenTypes::Unique)
         {
             match self.previous().token_type {
-                SQLTokenTypes::PRIMARY => {
-                    self.consume(SQLTokenTypes::KEY, "Expect KEY after PRIMARY")?;
+                SQLTokenTypes::Primary => {
+                    self.consume(SQLTokenTypes::Key, "Expect KEY after PRIMARY")?;
                     constraints.push(ColumnConstraint::PrimaryKey);
                 }
-                SQLTokenTypes::NOT => {
-                    self.consume(SQLTokenTypes::NULL, "Expect NULL after NOT")?;
-                    constraints.push(ColumnConstraint::NotNull);
+                SQLTokenTypes::Not => {
+                    self.consume(SQLTokenTypes::Null, "Expect NULL after NOT")?;
+                    constraints.push(ColumnConstraint::NotNull)
                 }
-                SQLTokenTypes::UNIQUE => constraints.push(ColumnConstraint::Unique),
-                _ => unreachable!(),
+                SQLTokenTypes::Unique => {
+                    self.consume(SQLTokenTypes::Unique, "Expected Unique constraints")?;
+                    constraints.push(ColumnConstraint::Unique)
+                }
+                _ => return Err("unknown token found".to_string()),
             }
         }
         Ok(constraints)
@@ -520,7 +484,7 @@ impl Parser {
     }
 
     fn is_at_end(&self) -> bool {
-        self.peek().token_type == SQLTokenTypes::EOF
+        self.peek().token_type == SQLTokenTypes::Eof
     }
 
     fn peek(&self) -> &Token {
@@ -539,17 +503,19 @@ mod tests {
     #[test]
     fn test_select_statement() {
         let mut parser = Parser::new(
-            "SELECT name, age FROM users WHERE (age > 18 or name IS NOT NULL) AND (name = 'data')"
+            "SELECT name, age FROM users WHERE NOT(((foo = 'bar' AND fuzz = 'fuzz0') OR (foo = 'baz' AND fuz = 'dazz')) AND (IS_ACTIVE = FALSE AND IS_ENABLED))"
                 .to_string(),
         );
         let result = parser.parse();
-        assert!(result.is_ok());
         if let Ok(SQLStatement::Select(select_stmt)) = result {
             assert_eq!(select_stmt.columns.len(), 2);
             assert_eq!(select_stmt.from, Some("users".to_string()));
             assert!(select_stmt.where_clause.is_some());
+            if let Some(where_clause) = select_stmt.where_clause {
+                println!("{:?}", where_clause.condition)
+            }
         } else {
-            panic!("Expected Select statement");
+            panic!("Expected Select statement, got error{:?}", result);
         }
     }
 

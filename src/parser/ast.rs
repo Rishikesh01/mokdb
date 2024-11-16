@@ -82,7 +82,7 @@ pub enum SelectColumn {
 
 #[derive(Debug)]
 pub struct WhereClause {
-    pub condition: Vec<Condition>,
+    pub condition: Condition,
 }
 
 #[derive(Debug)]
@@ -90,13 +90,20 @@ pub enum Condition {
     Comparison(ComparisonCondition),
     Logical(LogicalCondition),
     Not(Box<Condition>),
+    NullCheck(NullCheckCondition),
 }
 
 #[derive(Debug)]
 pub struct ComparisonCondition {
-    pub left: Expression,
     pub operator: ComparisonOperator,
+    pub left: Expression,
     pub right: Expression,
+}
+
+#[derive(Debug)]
+pub enum NullCheckCondition {
+    IsNull { identifier: String },
+    IsNotNull { identifier: String },
 }
 
 #[derive(Debug)]
