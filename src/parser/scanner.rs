@@ -14,7 +14,7 @@ pub struct Scanner {
 impl Scanner {
     pub fn new(source: String) -> Self {
         Self {
-            source: source,
+            source,
             current: 0,
             start: 0,
             line: 1,
@@ -27,7 +27,7 @@ impl Scanner {
             self.scan_token();
         }
         self.tokens.push(Token {
-            token_type: SQLTokenTypes::EOF,
+            token_type: SQLTokenTypes::Eof,
             lexeme: "".to_string(),
             literal: None,
         });
@@ -37,21 +37,39 @@ impl Scanner {
     fn scan_token(&mut self) {
         let c = self.advance();
         match c {
-            '(' => self.add_token(SQLTokenTypes::LEFTPAREN, None),
-            ')' => self.add_token(SQLTokenTypes::RIGHTPAREN, None),
-            '*' => self.add_token(SQLTokenTypes::STAR, None),
-            ',' => self.add_token(SQLTokenTypes::COMMA, None),
-            ';' => self.add_token(SQLTokenTypes::SEMICOLON, None),
-            '>' => self.add_token(SQLTokenTypes::GREATER, None),
-            '<' => self.add_token(SQLTokenTypes::LESSER, None),
-            '=' => self.add_token(SQLTokenTypes::EQUAL, None),
+            '(' => self.add_token(SQLTokenTypes::Leftparen, None),
+            ')' => self.add_token(SQLTokenTypes::Rightparen, None),
+            '*' => self.add_token(SQLTokenTypes::Star, None),
+            ',' => self.add_token(SQLTokenTypes::Comma, None),
+            ';' => self.add_token(SQLTokenTypes::Semicolon, None),
+            '>' => {
+                if self.peek() == '=' {
+                    self.advance();
+                    self.add_token(SQLTokenTypes::GreaterThanOrEqualTo, None);
+                } else {
+                    self.add_token(SQLTokenTypes::Greater, None);
+                }
+            }
+            '<' => {
+                if self.peek() == '=' {
+                    self.advance();
+                    self.add_token(SQLTokenTypes::LesserThanOrEqualTo, None);
+                } else if self.peek() == '>' {
+                    self.advance();
+                    self.add_token(SQLTokenTypes::NotEqual, None);
+                } else {
+                    self.add_token(SQLTokenTypes::Lesser, None);
+                }
+            }
+            '=' => self.add_token(SQLTokenTypes::Equal, None),
+
             '\'' => {
                 while self.peek() != '\'' {
                     self.advance();
                 }
                 self.advance();
-                let stringValue = self.source[self.start..self.current].to_string();
-                self.add_token(SQLTokenTypes::IDENTIFIER, Some(Box::new(stringValue)));
+                let string_value = self.source[self.start..self.current].to_string();
+                self.add_token(SQLTokenTypes::Identifier, Some(Box::new(string_value)));
             }
             '\n' => self.line += 1,
 
@@ -69,7 +87,7 @@ impl Scanner {
                 }
 
                 let value: f64 = self.source[self.start..self.current].parse().unwrap();
-                self.add_token(SQLTokenTypes::NUMBER, Some(Box::new(value)));
+                self.add_token(SQLTokenTypes::Number, Some(Box::new(value)));
             }
             _ if c.is_alphanumeric() => {
                 while self.peek().is_ascii_alphanumeric() || self.peek() == '_' {
@@ -78,33 +96,33 @@ impl Scanner {
 
                 let text = &self.source[self.start..self.current].to_uppercase();
                 let token_type = match text.as_str() {
-                    "SELECT" => SQLTokenTypes::SELECT,
-                    "INSERT" => SQLTokenTypes::INSERT,
-                    "DELETE" => SQLTokenTypes::DELETE,
-                    "UPDATE" => SQLTokenTypes::UPDATE,
-                    "CREATE" => SQLTokenTypes::CREATE,
-                    "DROP" => SQLTokenTypes::DROP,
-                    "FROM" => SQLTokenTypes::FROM,
-                    "WHERE" => SQLTokenTypes::WHERE,
-                    "INTO" => SQLTokenTypes::INTO,
-                    "VALUES" => SQLTokenTypes::VALUES,
-                    "TRUNCATE" => SQLTokenTypes::TRUNCATE,
-                    "RENAME" => SQLTokenTypes::RENAME,
-                    "ALTER" => SQLTokenTypes::ALTER,
-                    "SET" => SQLTokenTypes::SET,
-                    "COMMIT" => SQLTokenTypes::COMMIT,
-                    "ROLLBACK" => SQLTokenTypes::ROLLBACK,
-                    "SAVEPOINT" => SQLTokenTypes::SAVEPOINT,
-                    "TABLE" => SQLTokenTypes::TABLE,
-                    "PRIMARY" => SQLTokenTypes::PRIMARY,
-                    "KEY" => SQLTokenTypes::KEY,
-                    "UNIQUE" => SQLTokenTypes::UNIQUE,
-                    "AND" => SQLTokenTypes::AND,
-                    "NOT" => SQLTokenTypes::NOT,
-                    "NULL" => SQLTokenTypes::NULL,
+                    "SELECT" => SQLTokenTypes::Select,
+                    "INSERT" => SQLTokenTypes::Insert,
+                    "DELETE" => SQLTokenTypes::Delete,
+                    "UPDATE" => SQLTokenTypes::Update,
+                    "CREATE" => SQLTokenTypes::Create,
+                    "DROP" => SQLTokenTypes::Drop,
+                    "FROM" => SQLTokenTypes::From,
+                    "WHERE" => SQLTokenTypes::Where,
+                    "INTO" => SQLTokenTypes::Into,
+                    "VALUES" => SQLTokenTypes::Values,
+                    "TRUNCATE" => SQLTokenTypes::Truncate,
+                    "RENAME" => SQLTokenTypes::Rename,
+                    "ALTER" => SQLTokenTypes::Alter,
+                    "SET" => SQLTokenTypes::Set,
+                    "COMMIT" => SQLTokenTypes::Commit,
+                    "ROLLBACK" => SQLTokenTypes::Rollback,
+                    "SAVEPOINT" => SQLTokenTypes::Savepoint,
+                    "TABLE" => SQLTokenTypes::Table,
+                    "PRIMARY" => SQLTokenTypes::Primary,
+                    "KEY" => SQLTokenTypes::Key,
+                    "UNIQUE" => SQLTokenTypes::Unique,
+                    "AND" => SQLTokenTypes::And,
+                    "NOT" => SQLTokenTypes::Not,
+                    "NULL" => SQLTokenTypes::Null,
                     "IS" => SQLTokenTypes::IS,
                     "OR" => SQLTokenTypes::OR,
-                    _ => SQLTokenTypes::IDENTIFIER,
+                    _ => SQLTokenTypes::Identifier,
                 };
 
                 self.add_token(token_type, None);
@@ -115,7 +133,7 @@ impl Scanner {
     }
 
     fn advance(&mut self) -> char {
-        let c = self.source.chars().nth(self.current).unwrap();
+        let c = self.source[self.current..].chars().next().unwrap();
         self.current += 1;
         return c;
     }
