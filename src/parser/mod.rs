@@ -591,4 +591,47 @@ mod tests {
             panic!("Expected Drop statement");
         }
     }
+
+    #[test]
+    fn test_more_invalid_syntax() {
+        // More examples of invalid SQL syntax
+        let invalid_queries = vec![
+            // SELECT statements
+            "SELECT * FROM",              // Missing table name
+            "SELECT name age FROM users", // Missing comma between columns
+            "SELECT name, FROM users",    // Trailing comma with no column name
+            // INSERT statements
+            "INSERT INTO users VALUES 'John', 25", // Missing parentheses for values
+            "INSERT INTO users (name, age) VALU ('John', 25)", // Typo in 'VALUES'
+            "INSERT INTO users (, age) VALUES ('John', 25)", // Invalid column list
+            // UPDATE statements
+            "UPDATE SET name = 'Jane' WHERE id = 1", // Missing table name
+            "UPDATE users name = 'Jane' WHERE id = 1", // Missing SET keyword
+            "UPDATE users SET WHERE id = 1",         // Missing column assignment
+            // DELETE statements
+            "DELETE FROM WHERE id = 1",  // Missing table name
+            "DELETE users WHERE id = 1", // Missing FROM keyword
+            "DELETE FROM users id = 1",  // Missing WHERE keyword
+            // CREATE TABLE statements
+            "CREATE TABLE users id INTEGER name TEXT", // Missing commas between column definitions
+            "CREATE TABLE (id INTEGER, name TEXT)",    // Missing table name
+            "CREATE TABLE users ()",                   // Empty column definitions
+            // DROP statements
+            "DROP",       // Missing object type (TABLE, DATABASE, etc.)
+            "DROP TABLE", // Missing table name
+            "DROP INDEX", // Missing index name
+            // Miscellaneous
+            "ALTER TABLE users ADD COLUMN", // Missing column definition
+            "SELECT * FORM users",          // Typo in 'FROM'
+            "GRANT SELECT ON TO user",      // Missing object name
+            "REVOKE FROM user",             // Missing permission and object name
+        ];
+
+        for query in invalid_queries {
+            let mut parser = Parser::new(query.to_string());
+            let result = parser.parse();
+            assert!(result.is_err(), "Expected error for query: {}", query);
+            println!("Error for query '{}': {:?}", query, result.err());
+        }
+    }
 }
