@@ -1,5 +1,4 @@
-use super::tokens::{SQLTokenType, Token};
-use std::any::Any;
+use super::tokens::{ParsedLiteral, Token, Types};
 
 struct Scanner {
     source: String,
@@ -28,14 +27,18 @@ impl Scanner {
 
         if let Some(c) = c {
             match c {
-                '(' => self.add_token(SQLTokenType::Leftparen, "(".to_string(), None),
-                ')' => self.add_token(SQLTokenType::Rightparen, ")".to_string(), None),
-                '*' => self.add_token(SQLTokenType::Star, "*".to_string(), None),
-                ',' => self.add_token(SQLTokenType::Comma, ",".to_string(), None),
-                ';' => self.add_token(SQLTokenType::Semicolon, ";".to_string(), None),
+                '(' => self.add_token(Types::OpenParen, "(".to_string(), None),
+                ')' => self.add_token(Types::CloseParen, ")".to_string(), None),
+                '*' => self.add_token(Types::AllColumnsOrMultiplication, "*".to_string(), None),
+                ',' => self.add_token(Types::Comma, ",".to_string(), None),
+                ';' => self.add_token(Types::Semicolon, ";".to_string(), None),
                 '>' => self.handle_greater_relational_operator(),
                 '<' => self.handle_lesser_relational_operator(),
-                '=' => self.add_token(SQLTokenType::Equal, "=".to_string(), None),
+                '=' => self.add_token(Types::EqualTo, "=".to_string(), None),
+                '+' => self.add_token(Types::Addition, "+".to_string(), None),
+                '-' => self.add_token(Types::Subtraction, "-".to_string(), None),
+                '/' => self.add_token(Types::Division, "/".to_string(), None),
+                '%' => self.add_token(Types::Modulus, "%".to_string(), None),
                 '\'' => self.handle_string(),
                 '\n' => {
                     self.line += 1;
@@ -54,9 +57,9 @@ impl Scanner {
                 self.advance();
                 let string_value: String = self.source[self.start..self.current - 1].to_string();
                 self.add_token(
-                    SQLTokenType::String,
+                    Types::Literal,
                     string_value.clone(),
-                    Some(Box::new(string_value)),
+                    Some(ParsedLiteral::Text(string_value)),
                 );
                 return;
             } else if c == '\\' {
@@ -112,9 +115,9 @@ impl Scanner {
         // Successfully parse the number (either integer or floating point)
         let value: f64 = self.source[self.start..self.current].parse().unwrap();
         self.add_token(
-            SQLTokenType::Number,
+            Types::Literal,
             value.to_string(),
-            Some(Box::new(value)),
+            Some(ParsedLiteral::Floating(value)),
         );
     }
 
@@ -131,56 +134,225 @@ impl Scanner {
             .to_string()
             .to_uppercase();
         let token_type = match text.as_str() {
-            "SELECT" => SQLTokenType::Select,
-            "INSERT" => SQLTokenType::Insert,
-            "DELETE" => SQLTokenType::Delete,
-            "UPDATE" => SQLTokenType::Update,
-            "CREATE" => SQLTokenType::Create,
-            "DROP" => SQLTokenType::Drop,
-            "FROM" => SQLTokenType::From,
-            "WHERE" => SQLTokenType::Where,
-            "INTO" => SQLTokenType::Into,
-            "VALUES" => SQLTokenType::Values,
-            "TRUNCATE" => SQLTokenType::Truncate,
-            "RENAME" => SQLTokenType::Rename,
-            "ALTER" => SQLTokenType::Alter,
-            "SET" => SQLTokenType::Set,
-            "COMMIT" => SQLTokenType::Commit,
-            "ROLLBACK" => SQLTokenType::Rollback,
-            "SAVEPOINT" => SQLTokenType::Savepoint,
-            "TABLE" => SQLTokenType::Table,
-            "PRIMARY" => SQLTokenType::Primary,
-            "KEY" => SQLTokenType::Key,
-            "UNIQUE" => SQLTokenType::Unique,
-            "AND" => SQLTokenType::And,
-            "NOT" => SQLTokenType::Not,
-            "NULL" => SQLTokenType::Null,
-            "IS" => SQLTokenType::IS,
-            "OR" => SQLTokenType::OR,
-            _ => SQLTokenType::Identifier,
+            "SELECT" => Types::Select,
+            "INSERT" => Types::Insert,
+            "DELETE" => Types::Delete,
+            "UPDATE" => Types::Update,
+            "CREATE" => Types::Create,
+            "DROP" => Types::Drop,
+            "FROM" => Types::From,
+            "WHERE" => Types::Where,
+            "INTO" => Types::Into,
+            "VALUES" => Types::Values,
+            "TRUNCATE" => Types::Truncate,
+            "RENAME" => Types::Rename,
+            "ALTER" => Types::Alter,
+            "ON" => Types::On,
+            "ASC" => Types::AscendingOrder,
+            "DESC" => Types::DecendingOrder,
+            "SET" => Types::Set,
+            "COMMIT" => Types::Commit,
+            "ROLLBACK" => Types::RollBack,
+            "TABLE" => Types::Table,
+            "AND" => Types::And,
+            "NOT" => Types::Not,
+            "NULL" => Types::Null,
+            "IS" => Types::Is,
+            "ADD" => Types::Add,
+            "CONSTRAINT" => Types::Constraint,
+            "OR" => Types::Or,
+            "SCHEMA" => Types::Schema,
+            "DISTINCT" => Types::Distinct,
+            "IN" => Types::In,
+            "INTEGER" => Types::Insert,
+            "TEXT" => Types::Text,
+            "Decimal" => Types::Decimal,
+            "BOOLEAN" => Types::Boolean,
+            "PRIMARY" => {
+                while let Some(c) = self.peek() {
+                    if c.is_whitespace() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                let token_part = "KEY";
+                match self.source[self.current..self.current + token_part.len()]
+                    .to_string()
+                    .to_uppercase()
+                    == token_part
+                {
+                    true => {
+                        self.current += token_part.len();
+                        Types::PrimaryKey
+                    }
+                    false => Types::Invalid,
+                }
+            }
+            "UNIQUE" => {
+                let token_part = "KEY";
+                match self.source[self.current..self.current + token_part.len()]
+                    .to_string()
+                    .to_uppercase()
+                    == token_part
+                {
+                    true => {
+                        self.current += token_part.len();
+                        Types::PrimaryKey
+                    }
+                    false => Types::Invalid,
+                }
+            }
+            "FOREGIN" => {
+                let token_part = "KEY";
+                match self.source[self.current..self.current + token_part.len()]
+                    .to_string()
+                    .to_uppercase()
+                    == token_part
+                {
+                    true => {
+                        self.current += token_part.len();
+                        Types::ForeginKey
+                    }
+                    false => Types::Invalid,
+                }
+            }
+
+            "LEFT" => {
+                while let Some(c) = self.peek() {
+                    if c.is_whitespace() || c == '\n' {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                let token_part = "JOIN";
+                match self.source[self.current..self.current + token_part.len()].to_uppercase()
+                    == token_part
+                {
+                    true => {
+                        self.current += token_part.len();
+                        Types::LeftJoin
+                    }
+                    false => Types::Invalid,
+                }
+            }
+            "RIGHT" => {
+                while let Some(c) = self.peek() {
+                    if c.is_whitespace() || c == '\n' {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+
+                let token_part = "JOIN";
+                match self.source[self.current..self.current + token_part.len()].to_uppercase()
+                    == token_part
+                {
+                    true => {
+                        self.current += token_part.len();
+                        Types::LeftJoin
+                    }
+                    false => Types::Invalid,
+                }
+            }
+            "BEGIN" => {
+                while let Some(c) = self.peek() {
+                    if c.is_whitespace() || c == '\n' {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+
+                let token_part = "TRANSACTION";
+                match self.source[self.current..self.current + token_part.len()].to_uppercase()
+                    == token_part
+                {
+                    true => Types::BeginTransaction,
+                    false => Types::Invalid,
+                }
+            }
+            "FULL" => {
+                while let Some(c) = self.peek() {
+                    if c.is_whitespace() || c == '\n' {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                let token_part_1 = "OUTER";
+                match self.source[self.current..self.current + token_part_1.len()].to_uppercase()
+                    == token_part_1
+                {
+                    true => {
+                        self.current += token_part_1.len();
+                        while let Some(c) = self.peek() {
+                            if c.is_whitespace() || c == '\n' {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                        let token_part_2 = "JOIN";
+                        match self.source[self.current..self.current + token_part_2.len()]
+                            .to_uppercase()
+                            == token_part_2
+                        {
+                            true => {
+                                self.current += token_part_2.len();
+                                Types::FullOuterJoin
+                            }
+                            false => Types::Invalid,
+                        }
+                    }
+                    false => Types::Invalid,
+                }
+            }
+            "ORDER" => {
+                while let Some(c) = self.peek() {
+                    if c.is_whitespace() || c == '\n' {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                let token_part = "BY";
+                match self.source[self.current..self.current + token_part.len()].to_uppercase()
+                    == token_part
+                {
+                    true => {
+                        self.current += token_part.len();
+                        Types::OrderBy
+                    }
+                    false => Types::Invalid,
+                }
+            }
+            _ => Types::Identifier,
         };
 
-        self.add_token(token_type, text.clone(), Some(Box::new(text)));
+        self.add_token(token_type, text.clone(), None);
     }
 
     fn handle_greater_relational_operator(&mut self) {
         if let Some('=') = self.peek() {
             self.advance();
-            self.add_token(SQLTokenType::GreaterThanOrEqualTo, ">=".to_string(), None);
+            self.add_token(Types::GreaterThanOrEqualTo, ">=".to_string(), None);
         } else {
-            self.add_token(SQLTokenType::Greater, ">".to_string(), None);
+            self.add_token(Types::GreaterThan, ">".to_string(), None);
         }
     }
 
     fn handle_lesser_relational_operator(&mut self) {
         if let Some('=') = self.peek() {
             self.advance();
-            self.add_token(SQLTokenType::LesserThanOrEqualTo, "<=".to_string(), None);
+            self.add_token(Types::LessThanOrEqualTo, "<=".to_string(), None);
         } else if let Some('>') = self.peek() {
             self.advance();
-            self.add_token(SQLTokenType::NotEqual, "<>".to_string(), None);
+            self.add_token(Types::NotEqualTo, "<>".to_string(), None);
         } else {
-            self.add_token(SQLTokenType::Lesser, "<".to_string(), None);
+            self.add_token(Types::LessThan, "<".to_string(), None);
         }
     }
 
@@ -202,12 +374,7 @@ impl Scanner {
         self.source[self.current..].chars().next()
     }
 
-    fn add_token(
-        &mut self,
-        token_type: SQLTokenType,
-        lexeme: String,
-        literal: Option<Box<dyn Any>>,
-    ) {
+    fn add_token(&mut self, token_type: Types, lexeme: String, literal: Option<ParsedLiteral>) {
         let value = Token::new(token_type, lexeme, literal, self.line, self.column);
         self.tokens.push(value);
     }

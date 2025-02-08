@@ -1,3 +1,5 @@
+use super::tokens::Types;
+
 #[derive(Debug)]
 pub enum SQLStatement {
     Select(SelectStatement),
@@ -50,8 +52,8 @@ pub struct ColumnDefinition {
 #[derive(Debug)]
 pub enum DataType {
     Integer,
-    Float,
-    Varchar(Option<usize>),
+    Decimal,
+    Text,
     Boolean,
 }
 
@@ -59,7 +61,7 @@ pub enum DataType {
 pub enum ColumnConstraint {
     PrimaryKey,
     NotNull,
-    Unique,
+    UniqueKey,
 }
 
 #[derive(Debug)]
@@ -148,6 +150,15 @@ pub enum LogicalOperator {
     And,
     Or,
 }
+impl LogicalOperator {
+    pub fn match_sql_token_to_operator(sql_token: Types) -> Result<LogicalOperator, String> {
+        match sql_token {
+            Types::And => Ok(LogicalOperator::And),
+            Types::Or => Ok(LogicalOperator::Or),
+            _ => Err("unexpected token".to_string()),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum Expression {
@@ -158,6 +169,7 @@ pub enum Expression {
 #[derive(Debug)]
 pub enum Literal {
     String(String),
-    Number(f64),
+    Number(i64),
+    Decimal(f64),
     Boolean(bool),
 }

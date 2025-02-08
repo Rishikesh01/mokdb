@@ -1,144 +1,114 @@
-use std::any::Any;
-
-#[derive(Debug, PartialEq)]
-pub enum SQLTokenType {
-    //Data Manipulation language
-    Select,
-    Insert,
-    Delete,
-    Update,
-    //Data Definiation language
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Types {
+    //DDL – Data Definition Language
     Create,
     Drop,
-    Truncate,
-    Rename,
     Alter,
-    //TCL
-    Commit,
-    Rollback,
-    Savepoint,
-    TableIdentifier,
-    Identifier,
-    Number,
-    Eof,
-
-    //other
-    Leftparen,
-    Rightparen,
-    Star,
-    Comma,
-    Semicolon,
-    Newline,
-
-    //logical
-    Greater,
-    Lesser,
-    Equal,
-
-    Primary,
-    Key,
-    Not,
-    Unique,
-    Null,
-
-    Into,
-    Values,
-
-    Set,
-    Where,
-    From,
-
-    And,
-    OR,
-    NotEqual,
-    String,
+    Rename,
     Table,
+    Schema,
 
-    IS,
-    GreaterThanOrEqualTo,
-    LesserThanOrEqualTo,
-
+    //DQL – Data Query Language
+    Select,
+    Distinct,
+    From,
+    Where,
     OrderBy,
-    AcendingOrder,
-    DecendingOrder,
+    LeftJoin,
+    RightJoin,
+    FullOuterJoin,
+    On,
+    //DML – Data Manipulation Language
+    Insert,
+    Values,
+    Into,
+    Update,
+    Set,
+    Delete,
+    Lock,
+
+    //TCL – Transaction Control Language
+    BeginTransaction,
+    RollBack,
+    Commit,
+
+    //Arithmetic Operators
+    Addition,
+    Subtraction,
+    Division,
+    Modulus,
+
+    // Comparison Operators
+    EqualTo,
+    GreaterThan,
+    LessThan,
+    GreaterThanOrEqualTo,
+    LessThanOrEqualTo,
+    NotEqualTo,
+
+    // Logical Operators
+    And,
+    Or,
+    Not,
+
+    // Special operators
     In,
 
+    // Data types
+    Integer,
+    Text,
+    Decimal,
     Boolean,
+
+    // Table related constraints
+    PrimaryKey,
+    UniqueKey,
+    ForeginKey,
+
+    // Other keywords
+    Null,
+    Constraint,
+    Add,
+    Truncate,
+    Is,
+
+    // prasing related keywords
+    Identifier,
+    Literal,
+    OpenParen,
+    CloseParen,
+    Comma,
+    Semicolon,
+    Eof,
+    AllColumnsOrMultiplication,
+    Invalid,
+
+    // Ordering
+    AscendingOrder,
+    DecendingOrder,
 }
 
-impl Clone for SQLTokenType {
-    fn clone_from(&mut self, source: &Self) {
-        *self = source.clone()
-    }
-
-    fn clone(&self) -> Self {
-        match self {
-            Self::Select => Self::Select,
-            Self::Insert => Self::Insert,
-            Self::Delete => Self::Delete,
-            Self::Update => Self::Update,
-            Self::Create => Self::Create,
-            Self::Drop => Self::Drop,
-            Self::Truncate => Self::Truncate,
-            Self::Rename => Self::Rename,
-            Self::Alter => Self::Alter,
-            Self::Commit => Self::Commit,
-            Self::Rollback => Self::Rollback,
-            Self::Savepoint => Self::Savepoint,
-            Self::TableIdentifier => Self::TableIdentifier,
-            Self::Identifier => Self::Identifier,
-            Self::Number => Self::Number,
-            Self::Eof => Self::Eof,
-            Self::Leftparen => Self::Leftparen,
-            Self::Rightparen => Self::Rightparen,
-            Self::Star => Self::Star,
-            Self::Comma => Self::Comma,
-            Self::Semicolon => Self::Semicolon,
-            Self::Newline => Self::Newline,
-            Self::Greater => Self::Greater,
-            Self::Lesser => Self::Lesser,
-            Self::Equal => Self::Equal,
-            Self::Primary => Self::Primary,
-            Self::Key => Self::Key,
-            Self::Not => Self::Not,
-            Self::Unique => Self::Unique,
-            Self::Null => Self::Null,
-            Self::Into => Self::Into,
-            Self::Values => Self::Values,
-            Self::Set => Self::Set,
-            Self::Where => Self::Where,
-            Self::From => Self::From,
-            Self::And => Self::And,
-            Self::OR => Self::OR,
-            Self::NotEqual => Self::NotEqual,
-            Self::String => Self::String,
-            Self::Table => Self::Table,
-            Self::IS => Self::IS,
-            Self::GreaterThanOrEqualTo => Self::GreaterThanOrEqualTo,
-            Self::LesserThanOrEqualTo => Self::LesserThanOrEqualTo,
-            Self::OrderBy => Self::OrderBy,
-            Self::AcendingOrder => Self::AcendingOrder,
-            Self::DecendingOrder => Self::DecendingOrder,
-            Self::In => Self::In,
-            Self::Boolean => Self::Boolean,
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Token {
-    pub token_type: SQLTokenType,
+    pub token_type: Types,
     pub lexeme: String,
-    pub literal: Option<Box<dyn Any>>,
+    pub literal: Option<ParsedLiteral>,
     pub line: usize,
     pub column: usize,
 }
 
+#[derive(Debug, Clone)]
+pub enum ParsedLiteral {
+    Text(String),
+    Number(i64),
+    Floating(f64),
+}
+
 impl Token {
     pub fn new(
-        token_type: SQLTokenType,
+        token_type: Types,
         lexeme: String,
-        literal: Option<Box<dyn Any>>,
+        literal: Option<ParsedLiteral>,
         line: usize,
         column: usize,
     ) -> Self {
@@ -149,11 +119,5 @@ impl Token {
             line,
             column,
         }
-    }
-
-    pub fn get_literal<T: 'static>(&self) -> Option<&T> {
-        self.literal
-            .as_ref()
-            .and_then(|boxed| boxed.downcast_ref::<T>())
     }
 }
