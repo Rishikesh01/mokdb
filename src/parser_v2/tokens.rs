@@ -101,7 +101,7 @@ pub struct Token {
 pub enum ParsedLiteral {
     Text(String),
     Number(i64),
-    Floating(f64),
+    Decimal(f64),
 }
 
 impl Token {

@@ -21,7 +21,7 @@ impl Scanner {
         }
     }
 
-    fn scan_token(&mut self) {
+    fn scan_token(&mut self) -> Result<(), String> {
         self.start = self.current;
         let c = self.advance();
 
@@ -39,19 +39,26 @@ impl Scanner {
                 '-' => self.add_token(Types::Subtraction, "-".to_string(), None),
                 '/' => self.add_token(Types::Division, "/".to_string(), None),
                 '%' => self.add_token(Types::Modulus, "%".to_string(), None),
-                '\'' => self.handle_string(),
+                '\'' => self.handle_string()?,
                 '\n' => {
                     self.line += 1;
                     self.column = 0;
                 }
-                _ if c.is_numeric() => self.handle_numeric(),
-                _ if c.is_alphanumeric() => self.handle_alpha_numeric(),
-                _ => {}
+                _ if c.is_whitespace() => {}
+                _ if c.is_numeric() => self.handle_numeric()?,
+                _ if c.is_alphanumeric() => self.handle_alpha_numeric()?,
+                _ => {
+                    return Err(format!(
+                        "Unexpected character: '{}'\n line number: {}, column: {}",
+                        c, self.line, self.column
+                    ))
+                }
             }
         }
+        Ok(())
     }
 
-    fn handle_string(&mut self) {
+    fn handle_string(&mut self) -> Result<(), String> {
         while let Some(c) = self.peek() {
             if c == '\'' {
                 self.advance();
@@ -61,7 +68,7 @@ impl Scanner {
                     string_value.clone(),
                     Some(ParsedLiteral::Text(string_value)),
                 );
-                return;
+                return Ok(());
             } else if c == '\\' {
                 self.advance();
                 if let Some(escaped_char) = self.peek() {
@@ -70,7 +77,10 @@ impl Scanner {
                             self.advance();
                         }
                         _ => {
-                            self.advance();
+                            return Err(format!(
+                                "Invalid escape sequence: \\{}\n at line number: {}, column: {}",
+                                escaped_char, self.line, self.column
+                            ))
                         }
                     }
                 }
@@ -78,9 +88,14 @@ impl Scanner {
                 self.advance();
             }
         }
+
+        Err(format!(
+            "Unterminating string at line number: {}, column: {}",
+            self.line, self.column
+        ))
     }
 
-    fn handle_numeric(&mut self) {
+    fn handle_numeric(&mut self) -> Result<(), String> {
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
                 self.advance();
@@ -104,24 +119,33 @@ impl Scanner {
             }
 
             if !has_digits_after_dot {
-                println!(
-                    "Error: Invalid floating point number '{}'.",
-                    &self.source[self.start..self.current]
-                );
-                return;
+                return Err(format!(
+                    "error: Invalid floating point number '{}'\n at line number: {}, column: {}",
+                    &self.source[self.start..self.current],
+                    self.line,
+                    self.column
+                ));
             }
         }
 
         // Successfully parse the number (either integer or floating point)
-        let value: f64 = self.source[self.start..self.current].parse().unwrap();
+        let value: f64 = self.source[self.start..self.current].parse().map_err(|_| {
+            format!(
+                "Could not parse number '{}'\n at line number: {}, column {}",
+                &self.source[self.start..self.current],
+                self.line,
+                self.column,
+            )
+        })?;
         self.add_token(
             Types::Literal,
             value.to_string(),
-            Some(ParsedLiteral::Floating(value)),
+            Some(ParsedLiteral::Decimal(value)),
         );
+        Ok(())
     }
 
-    fn handle_alpha_numeric(&mut self) {
+    fn handle_alpha_numeric(&mut self) -> Result<(), String> {
         while let Some(c) = self.peek() {
             if c.is_ascii_alphanumeric() || c == '_' {
                 self.advance();
@@ -186,7 +210,13 @@ impl Scanner {
                         self.current += token_part.len();
                         Types::PrimaryKey
                     }
-                    false => Types::Invalid,
+                    false => {
+                        return Err(format!(
+                            "Error on line {}: Expected 'KEY' after 'PRIMARY' but found '{}'.",
+                            self.line,
+                            &self.source[self.current..]
+                        ));
+                    }
                 }
             }
             "UNIQUE" => {
@@ -200,7 +230,13 @@ impl Scanner {
                         self.current += token_part.len();
                         Types::PrimaryKey
                     }
-                    false => Types::Invalid,
+                    false => {
+                        return Err(format!(
+                            "Error on line {}: Expected 'KEY' after 'UNIQUE' but found '{}'.",
+                            self.line,
+                            &self.source[self.current..]
+                        ));
+                    }
                 }
             }
             "FOREGIN" => {
@@ -214,7 +250,13 @@ impl Scanner {
                         self.current += token_part.len();
                         Types::ForeginKey
                     }
-                    false => Types::Invalid,
+                    false => {
+                        return Err(format!(
+                            "Error on line {}: Expected 'KEY' after 'FOREIGN' but found '{}'.",
+                            self.line,
+                            &self.source[self.current..]
+                        ));
+                    }
                 }
             }
 
@@ -234,7 +276,14 @@ impl Scanner {
                         self.current += token_part.len();
                         Types::LeftJoin
                     }
-                    false => Types::Invalid,
+                    false => {
+                        return Err(format!(
+                        "expected 'JOIN' after 'LEFT' but found '{}'\n line number: {}, column:{}",
+                        self.line,
+                        self.column,
+                        &self.source[self.current..]
+                    ))
+                    }
                 }
             }
             "RIGHT" => {
@@ -254,7 +303,14 @@ impl Scanner {
                         self.current += token_part.len();
                         Types::LeftJoin
                     }
-                    false => Types::Invalid,
+                    false => {
+                        return Err(format!(
+                        "expected 'JOIN' after 'RIGHT' but found '{}'\n line number: {}, column:{}",
+                        self.line,
+                        self.column,
+                        &self.source[self.current..]
+                    ))
+                    }
                 }
             }
             "BEGIN" => {
@@ -271,7 +327,14 @@ impl Scanner {
                     == token_part
                 {
                     true => Types::BeginTransaction,
-                    false => Types::Invalid,
+                    false => {
+                        return Err(format!(
+                        "expected 'TRANSACTION' after 'BEGIN' but found '{}'\n line number: {}, column:{}",
+                        self.line,
+                        self.column,
+                        &self.source[self.current..]
+                    ))
+                    }
                 }
             }
             "FULL" => {
@@ -304,10 +367,24 @@ impl Scanner {
                                 self.current += token_part_2.len();
                                 Types::FullOuterJoin
                             }
-                            false => Types::Invalid,
+                            false => {
+                                return Err(format!(
+                        "expected 'JOIN' after 'OUTER' but found '{}'\n line number: {}, column:{}",
+                        self.line,
+                        self.column,
+                        &self.source[self.current..]
+                    ))
+                            }
                         }
                     }
-                    false => Types::Invalid,
+                    false => {
+                        return Err(format!(
+                        "expected 'OUTER' after 'FULL' but found '{}'\n line number: {}, column:{}",
+                        self.line,
+                        self.column,
+                        &self.source[self.current..]
+                    ))
+                    }
                 }
             }
             "ORDER" => {
@@ -326,13 +403,21 @@ impl Scanner {
                         self.current += token_part.len();
                         Types::OrderBy
                     }
-                    false => Types::Invalid,
+                    false => {
+                        return Err(format!(
+                        "expected 'BY' after 'ORDER' but found '{}'\n line number: {}, column:{}",
+                        self.line,
+                        self.column,
+                        &self.source[self.current..]
+                    ))
+                    }
                 }
             }
             _ => Types::Identifier,
         };
 
         self.add_token(token_type, text.clone(), None);
+        Ok(())
     }
 
     fn handle_greater_relational_operator(&mut self) {
@@ -385,14 +470,14 @@ impl Scanner {
 }
 
 pub trait SQLInput {
-    fn tokenize(self) -> Vec<Token>;
+    fn tokenize(self) -> Result<Vec<Token>, String>;
 }
 
 impl SQLInput for Scanner {
-    fn tokenize(mut self) -> Vec<Token> {
+    fn tokenize(mut self) -> Result<Vec<Token>, String> {
         while !self.is_at_end() {
-            self.scan_token();
+            self.scan_token()?;
         }
-        self.tokens
+        Ok(self.tokens)
     }
 }

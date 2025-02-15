@@ -1,8 +1,11 @@
+use std::collections::VecDeque;
+
 use super::{
     ast::{
         Assignment, ColumnConstraint, ColumnDefinition, Condition, CreateStatement, DataType,
-        DeleteStatement, DropStatement, Expression, InsertStatement, Literal, OrderByClause,
-        SQLStatement, SelectColumn, SelectStatement, UpdateStatement, WhereClause,
+        DeleteStatement, DropStatement, Expression, InCondition, InValues, InsertStatement,
+        Literal, NullCheckCondition, OrderByClause, SQLStatement, SelectColumn, SelectStatement,
+        UpdateStatement, WhereClause,
     },
     tokens::{ParsedLiteral, Token, Types},
 };
@@ -143,8 +146,8 @@ impl Parser {
      */
 
     fn handle_where_clause(&mut self) -> Result<Condition, String> {
-        let mut operator_parenthesis_stack = Vec::<Types>::new();
-        let mut output_queue = Vec::<Condition>::new();
+        let mut operator_parenthesis_stack = Vec::<Token>::new();
+        let mut output_queue = VecDeque::<Condition>::new();
 
         /*
          * -------------------------------------------------------------------------
@@ -162,11 +165,150 @@ impl Parser {
          *
          */
 
-        while !self.is_at_end() && !self.check(Types::OrderBy) {}
-
+        while !self.is_at_end() && !self.check(Types::OrderBy) {
+            let token = self.peek();
+            match token.token_type {
+                Types::Literal | Types::Identifier => {
+                    self.parse_primary_condition(token.clone())?;
+                }
+                Types::OpenParen => {
+                    operator_parenthesis_stack.push(self.consume(token.token_type, "")?.clone());
+                }
+                Types::CloseParen => {}
+                Types::And | Types::Or => {}
+                _ => return Err("Unexpected token in WHERE clause".to_string()),
+            }
+        }
         output_queue
-            .pop()
-            .ok_or("expected to have a condition after parsing".to_string())
+            .pop_back()
+            .ok_or_else(|| "Empty WHERE clause".to_string())
+    }
+
+    fn parse_primary_condition(&mut self, token: Token) -> Result<Condition, String> {
+        let lhs = self.consume(token.token_type, "")?.clone();
+        let token = self.peek();
+        match token.token_type {
+            Types::Is => {
+                self.consume(Types::Is, "")?;
+                if self.peek().token_type == Types::Not {
+                    self.consume(Types::Not, "")?;
+                    self.consume(Types::Null, "expected NULL")?;
+
+                    return Ok(Condition::NullCheck(NullCheckCondition::IsNotNull {
+                        identifier: lhs.lexeme,
+                    }));
+                } else if self.peek().token_type == Types::Null {
+                    return Ok(Condition::NullCheck(NullCheckCondition::IsNull {
+                        identifier: lhs.lexeme,
+                    }));
+                } else {
+                    Err(format!(
+                        "unexpected token:{} found after IS at line:{}, column:{}",
+                        self.peek().lexeme,
+                        self.peek().line,
+                        self.peek().column
+                    ))
+                }
+            }
+            Types::In => {
+                let left = match lhs.token_type {
+                    Types::Literal => Expression::Literal(
+                        match lhs.literal.unwrap(){
+                            ParsedLiteral::Text(e) => Literal::String(e),
+                            ParsedLiteral::Number(e) => Literal::Number(e),
+                            ParsedLiteral::Decimal(e) => Literal::Decimal(e),
+                        }
+                    ),
+                    _ => return Err(format!("expected literal or identifer but found token:{} of type: {:?}, on line number: {} column: {}",lhs.lexeme,lhs.token_type,lhs.line,lhs.column)),
+                };
+                self.consume(Types::In, "")?;
+                self.consume(Types::OpenParen, "expectd (")?;
+
+                if self.check(Types::Identifier) {
+                    let mut values = vec![];
+                    loop {
+                        if self.check(Types::Identifier) {
+                            values.push(Expression::Identifier(
+                                self.consume(Types::Identifier, "")?.to_owned().lexeme,
+                            ));
+                            continue;
+                        }
+                        if self.check(Types::Comma) {
+                            self.consume(Types::Comma, "")?;
+                            continue;
+                        }
+                        if self.check(Types::CloseParen) {
+                            self.consume(Types::CloseParen, "")?;
+                            break;
+                        } else {
+                            return Err("input of different types found".to_string());
+                        }
+                    }
+                    return Ok(Condition::In(InCondition {
+                        left,
+                        values: super::ast::InValues::List(Some(values)),
+                    }));
+                } else if self.check(Types::Literal) {
+                    let mut values = vec![];
+                    loop {
+                        if self.check(Types::Literal) {
+                            let value = match self
+                                .consume(Types::Literal, "")?
+                                .to_owned()
+                                .literal
+                                .unwrap()
+                            {
+                                ParsedLiteral::Text(e) => Expression::Literal(Literal::String(e)),
+                                ParsedLiteral::Number(e) => Expression::Literal(Literal::Number(e)),
+                                ParsedLiteral::Decimal(e) => {
+                                    Expression::Literal(Literal::Decimal(e))
+                                }
+                            };
+
+                            if let Some(Expression::Literal(last_lit)) = values.last() {
+                                if let Expression::Literal(_current_lit) = &value {
+                                    if !matches!(last_lit, _current_lit) {
+                                        return Err("input should be of the same type".to_string());
+                                    }
+                                }
+                            }
+                            values.push(value);
+                            continue;
+                        }
+                        if self.check(Types::Comma) {
+                            self.consume(Types::Comma, "")?;
+                            continue;
+                        }
+                        if self.check(Types::CloseParen) {
+                            self.consume(Types::CloseParen, "")?;
+                            break;
+                        } else {
+                            return Err("input of different types found".to_string());
+                        }
+                    }
+                    return Ok(Condition::In(InCondition {
+                        left,
+                        values: super::ast::InValues::List(Some(values)),
+                    }));
+                } else if self.check(Types::Select) {
+                    let sql_statement = self.select_statement()?;
+                    if let SQLStatement::Select(select) = sql_statement {
+                        return Ok(Condition::In(InCondition {
+                            left,
+                            values: InValues::Subquery(Some(Box::new(select))),
+                        }));
+                    }
+                }
+
+                return Err("should not reach here".to_string());
+            }
+            _ => {
+                return Err(format!(
+                    "found unexpected token: {} at line no: {}, column: {}",
+                    token.lexeme, token.line, token.column
+                ))
+            }
+        }
     }
 
     fn operator_precedence(&mut self, sql_token: Types) -> i32 {
@@ -183,7 +325,7 @@ impl Parser {
             let literal_type = match token.literal.as_ref().unwrap() {
                 ParsedLiteral::Text(e) => Literal::String(e.to_owned()),
                 ParsedLiteral::Number(e) => Literal::Number(e.to_owned()),
-                ParsedLiteral::Floating(e) => Literal::Decimal(e.to_owned()),
+                ParsedLiteral::Decimal(e) => Literal::Decimal(e.to_owned()),
             };
             Ok(Expression::Literal(literal_type))
         } else {
