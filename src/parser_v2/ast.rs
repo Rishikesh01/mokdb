@@ -75,6 +75,8 @@ pub struct SelectStatement {
     pub from: String,
     pub where_clause: Option<WhereClause>,
     pub order_by: Option<Vec<OrderByClause>>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -130,7 +132,7 @@ pub enum NullCheckCondition {
 
 #[derive(Debug)]
 pub enum ComparisonOperator {
-    Equal,
+    EqualTo,
     NotEqual,
     GreaterThan,
     LessThan,

@@ -1,12 +1,14 @@
+use std::rc::Rc;
+
 use super::tokens::{ParsedLiteral, Token, Types};
 
-struct Scanner {
+pub(crate) struct Scanner {
     source: String,
     start: usize,
     current: usize,
     line: usize,
     column: usize,
-    tokens: Vec<Token>,
+    tokens: Vec<Rc<Token>>,
 }
 
 impl Scanner {
@@ -113,7 +115,6 @@ impl Scanner {
                     has_digits_after_dot = true;
                     self.advance();
                 } else {
-                    has_digits_after_dot = false;
                     break;
                 }
             }
@@ -461,7 +462,7 @@ impl Scanner {
 
     fn add_token(&mut self, token_type: Types, lexeme: String, literal: Option<ParsedLiteral>) {
         let value = Token::new(token_type, lexeme, literal, self.line, self.column);
-        self.tokens.push(value);
+        self.tokens.push(Rc::new(value));
     }
 
     fn is_at_end(&self) -> bool {
@@ -470,11 +471,11 @@ impl Scanner {
 }
 
 pub trait SQLInput {
-    fn tokenize(self) -> Result<Vec<Token>, String>;
+    fn tokenize(self) -> Result<Vec<Rc<Token>>, String>;
 }
 
 impl SQLInput for Scanner {
-    fn tokenize(mut self) -> Result<Vec<Token>, String> {
+    fn tokenize(mut self) -> Result<Vec<Rc<Token>>, String> {
         while !self.is_at_end() {
             self.scan_token()?;
         }

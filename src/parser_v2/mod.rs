@@ -3,3 +3,4 @@ mod ast;
 mod parser;
 mod scanner;
 mod tokens;
+mod test;

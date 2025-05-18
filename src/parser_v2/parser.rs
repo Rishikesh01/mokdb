@@ -1,22 +1,23 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, rc::Rc};
 
 use super::{
     ast::{
-        Assignment, ColumnConstraint, ColumnDefinition, Condition, CreateStatement, DataType,
-        DeleteStatement, DropStatement, Expression, InCondition, InValues, InsertStatement,
-        Literal, NullCheckCondition, OrderByClause, SQLStatement, SelectColumn, SelectStatement,
+        Assignment, ColumnConstraint, ColumnDefinition, ComparisonCondition, ComparisonOperator,
+        Condition, CreateStatement, DataType, DeleteStatement, DropStatement, Expression,
+        InCondition, InValues, InsertStatement, Literal, LogicalCondition, LogicalOperator,
+        NullCheckCondition, OrderByClause, SQLStatement, SelectColumn, SelectStatement,
         UpdateStatement, WhereClause,
     },
     tokens::{ParsedLiteral, Token, Types},
 };
 
 pub struct Parser {
-    tokens: Vec<Token>,
+    tokens: Vec<Rc<Token>>,
     current: usize,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<Token>) -> Self {
+    pub fn new(tokens: Vec<Rc<Token>>) -> Self {
         Self { tokens, current: 0 }
     }
 
@@ -32,11 +33,14 @@ impl Parser {
         }
     }
 
-    fn peek(&self) -> &Token {
-        &self.tokens[self.current]
+    fn peek(&self) -> Rc<Token> {
+        self.tokens[self.current].clone()
     }
 
     fn check(&mut self, token_type: Types) -> bool {
+        if self.is_at_end() {
+            return false;
+        }
         self.peek().token_type == token_type
     }
 
@@ -44,10 +48,10 @@ impl Parser {
         self.current >= self.tokens.len()
     }
 
-    fn consume(&mut self, token_type: Types, message: &str) -> Result<&Token, String> {
+    fn consume(&mut self, token_type: Types, message: &str) -> Result<Rc<Token>, String> {
         if self.check(token_type) {
             self.current += 1;
-            Ok(&self.tokens[self.current - 1])
+            Ok(self.tokens[self.current - 1].clone())
         } else {
             Err(format!(
                 "error at line and column: {}:{}\nerror message: {}",
@@ -129,6 +133,8 @@ impl Parser {
             from: table_name,
             where_clause,
             order_by: order_by_clause,
+            limit: None,
+            offset: None,
         }))
     }
     /*
@@ -146,7 +152,7 @@ impl Parser {
      */
 
     fn handle_where_clause(&mut self) -> Result<Condition, String> {
-        let mut operator_parenthesis_stack = Vec::<Token>::new();
+        let mut operator_parenthesis_stack = Vec::<Rc<Token>>::new();
         let mut output_queue = VecDeque::<Condition>::new();
 
         /*
@@ -169,22 +175,84 @@ impl Parser {
             let token = self.peek();
             match token.token_type {
                 Types::Literal | Types::Identifier => {
-                    self.parse_primary_condition(token.clone())?;
+                    output_queue.push_back(self.parse_primary_condition(token)?);
+                    continue;
+                }
+                Types::Not => {
+                    self.consume(Types::Not, "")?;
+                    let condition = if self.check(Types::OpenParen) {
+                        let inner = self.handle_where_clause()?;
+                        inner
+                    } else {
+                        let tok = self.peek();
+                        self.parse_primary_condition(tok)?
+                    };
+
+                    output_queue.push_back(Condition::Not(Box::new(condition)));
                 }
                 Types::OpenParen => {
-                    operator_parenthesis_stack.push(self.consume(token.token_type, "")?.clone());
+                    operator_parenthesis_stack.push(self.consume(token.token_type, "")?);
+                    continue;
                 }
-                Types::CloseParen => {}
-                Types::And | Types::Or => {}
+                Types::CloseParen => {
+                    if let Err(err) = self.consume(token.token_type, "") {
+                        eprintln!("foo: {}", err);
+                    }
+                    while let Some(operator) = operator_parenthesis_stack.pop() {
+                        if operator.token_type == Types::OpenParen {
+                            break;
+                        }
+                        let right = output_queue.pop_back().ok_or("Invalid WHERE clause")?;
+                        let left = output_queue.pop_back().ok_or("Invalid WHERE clause")?;
+                        output_queue.push_back(Condition::Logical(LogicalCondition {
+                            left: Box::new(left),
+                            right: Box::new(right),
+                            operator: LogicalOperator::match_sql_token_to_operator(
+                                operator.token_type,
+                            )?,
+                        }));
+                    }
+                }
+                Types::And | Types::Or => {
+                    while let Some(stack_token) = operator_parenthesis_stack.last() {
+                        if stack_token.token_type == Types::OpenParen
+                            || self.operator_precedence(token.token_type)
+                                > self.operator_precedence(stack_token.token_type)
+                        {
+                            break;
+                        }
+                        let operator = LogicalOperator::match_sql_token_to_operator(
+                            operator_parenthesis_stack.pop().unwrap().token_type,
+                        )?;
+                        let right = output_queue.pop_back().ok_or("Invalid WHERE clause")?;
+                        let left = output_queue.pop_back().ok_or("Invalid WHERE clause")?;
+                        output_queue.push_back(Condition::Logical(LogicalCondition {
+                            left: Box::new(left),
+                            right: Box::new(right),
+                            operator,
+                        }));
+                    }
+                    operator_parenthesis_stack.push(self.consume(token.token_type, "")?);
+                }
                 _ => return Err("Unexpected token in WHERE clause".to_string()),
             }
         }
+        while let Some(operator) = operator_parenthesis_stack.pop() {
+            let right = output_queue.pop_back().ok_or("Invalid WHERE clause")?;
+            let left = output_queue.pop_back().ok_or("Invalid WHERE clause")?;
+            output_queue.push_back(Condition::Logical(LogicalCondition {
+                left: Box::new(left),
+                right: Box::new(right),
+                operator: LogicalOperator::match_sql_token_to_operator(operator.token_type)?,
+            }));
+        }
+
         output_queue
             .pop_back()
-            .ok_or_else(|| "Empty WHERE clause".to_string())
+            .ok_or("Empty WHERE clause".to_string())
     }
 
-    fn parse_primary_condition(&mut self, token: Token) -> Result<Condition, String> {
+    fn parse_primary_condition(&mut self, token: Rc<Token>) -> Result<Condition, String> {
         let lhs = self.consume(token.token_type, "")?.clone();
         let token = self.peek();
         match token.token_type {
@@ -195,11 +263,11 @@ impl Parser {
                     self.consume(Types::Null, "expected NULL")?;
 
                     return Ok(Condition::NullCheck(NullCheckCondition::IsNotNull {
-                        identifier: lhs.lexeme,
+                        identifier: lhs.lexeme.clone(),
                     }));
                 } else if self.peek().token_type == Types::Null {
                     return Ok(Condition::NullCheck(NullCheckCondition::IsNull {
-                        identifier: lhs.lexeme,
+                        identifier: lhs.lexeme.clone(),
                     }));
                 } else {
                     Err(format!(
@@ -211,16 +279,7 @@ impl Parser {
                 }
             }
             Types::In => {
-                let left = match lhs.token_type {
-                    Types::Literal => Expression::Literal(
-                        match lhs.literal.unwrap(){
-                            ParsedLiteral::Text(e) => Literal::String(e),
-                            ParsedLiteral::Number(e) => Literal::Number(e),
-                            ParsedLiteral::Decimal(e) => Literal::Decimal(e),
-                        }
-                    ),
-                    _ => return Err(format!("expected literal or identifer but found token:{} of type: {:?}, on line number: {} column: {}",lhs.lexeme,lhs.token_type,lhs.line,lhs.column)),
-                };
+                let left = self.parse_expression_for_input(lhs)?;
                 self.consume(Types::In, "")?;
                 self.consume(Types::OpenParen, "expectd (")?;
 
@@ -228,9 +287,7 @@ impl Parser {
                     let mut values = vec![];
                     loop {
                         if self.check(Types::Identifier) {
-                            values.push(Expression::Identifier(
-                                self.consume(Types::Identifier, "")?.to_owned().lexeme,
-                            ));
+                            values.push(self.parse_expression()?);
                             continue;
                         }
                         if self.check(Types::Comma) {
@@ -252,19 +309,7 @@ impl Parser {
                     let mut values = vec![];
                     loop {
                         if self.check(Types::Literal) {
-                            let value = match self
-                                .consume(Types::Literal, "")?
-                                .to_owned()
-                                .literal
-                                .unwrap()
-                            {
-                                ParsedLiteral::Text(e) => Expression::Literal(Literal::String(e)),
-                                ParsedLiteral::Number(e) => Expression::Literal(Literal::Number(e)),
-                                ParsedLiteral::Decimal(e) => {
-                                    Expression::Literal(Literal::Decimal(e))
-                                }
-                            };
-
+                            let value = self.parse_expression()?;
                             if let Some(Expression::Literal(last_lit)) = values.last() {
                                 if let Expression::Literal(_current_lit) = &value {
                                     if !matches!(last_lit, _current_lit) {
@@ -302,12 +347,34 @@ impl Parser {
 
                 return Err("should not reach here".to_string());
             }
-            _ => {
-                return Err(format!(
-                    "found unexpected token: {} at line no: {}, column: {}",
-                    token.lexeme, token.line, token.column
-                ))
+
+            Types::EqualTo
+            | Types::NotEqualTo
+            | Types::GreaterThan
+            | Types::LessThan
+            | Types::LessThanOrEqualTo
+            | Types::GreaterThanOrEqualTo => {
+                let left = self.parse_expression_for_input(lhs)?;
+                let operator = match self.peek().token_type {
+                    Types::EqualTo => ComparisonOperator::EqualTo,
+                    Types::NotEqualTo => ComparisonOperator::NotEqual,
+                    Types::GreaterThan => ComparisonOperator::GreaterThan,
+                    Types::LessThan => ComparisonOperator::LessThan,
+                    Types::LessThanOrEqualTo => ComparisonOperator::LessThanOrEqual,
+                    Types::GreaterThanOrEqualTo => ComparisonOperator::GreaterThanOrEqual,
+                    _ => return Err("invalid char found".to_string()),
+                };
+                self.consume(token.token_type, "")?;
+
+                let right = self.parse_expression()?;
+
+                return Ok(Condition::Comparison(ComparisonCondition {
+                    operator,
+                    left,
+                    right,
+                }));
             }
+            _ => return Err("should not reach here".to_string()),
         }
     }
 
@@ -328,9 +395,26 @@ impl Parser {
                 ParsedLiteral::Decimal(e) => Literal::Decimal(e.to_owned()),
             };
             Ok(Expression::Literal(literal_type))
+        } else if self.check(Types::Identifier) {
+            return Ok(Expression::Identifier(
+                self.consume(Types::Identifier, "")?.lexeme.to_string(),
+            ));
         } else {
             Err("Expected a valid expression".to_string())
         }
+    }
+
+    fn parse_expression_for_input(&mut self, token: Rc<Token>) -> Result<Expression, String> {
+        if token.token_type == Types::Literal {
+            let literal_type = match token.literal.as_ref().unwrap() {
+                ParsedLiteral::Text(e) => Literal::String(e.to_owned()),
+                ParsedLiteral::Number(e) => Literal::Number(e.to_owned()),
+                ParsedLiteral::Decimal(e) => Literal::Decimal(e.to_owned()),
+            };
+            return Ok(Expression::Literal(literal_type));
+        }
+
+        return Ok(Expression::Identifier(token.lexeme.to_string()));
     }
 
     // Insert statement parsing
@@ -492,10 +576,20 @@ impl Parser {
 
         Ok(SQLStatement::Create(CreateStatement { table, columns }))
     }
-
+    // syntax to support
+    // DROP table table_name,table_name2;
+    // DROP SCHEMA schema_name CASCADE;
+    // DROP SCHEMA IF EXISTS NAME, NAME2 RISITRICT;
     fn drop_statement(&mut self) -> Result<SQLStatement, String> {
         self.consume(Types::Drop, "expected DROP keyword")?;
-        self.consume(Types::Table, "expected TABLE keyword")?;
+        if self.check(Types::Table) && self.check(Types::Schema) {
+            return Err("expected TABLE or SCHEMA after DROP".to_string());
+        }
+        if self.check(Types::Table) {
+            self.consume(Types::Table, "expected TABLE keyword")?;
+        } else if self.check(Types::Schema) {
+            self.consume(Types::Schema, "expected TABLE keyword")?;
+        }
         let table = self
             .consume(Types::Identifier, "expected table name")?
             .lexeme
