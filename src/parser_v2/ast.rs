@@ -1,3 +1,5 @@
+use super::tokens::Types;
+
 #[derive(Debug)]
 pub enum SQLStatement {
     Select(SelectStatement),
@@ -50,8 +52,8 @@ pub struct ColumnDefinition {
 #[derive(Debug)]
 pub enum DataType {
     Integer,
-    Float,
-    Varchar(Option<usize>),
+    Decimal,
+    Text,
     Boolean,
 }
 
@@ -59,7 +61,7 @@ pub enum DataType {
 pub enum ColumnConstraint {
     PrimaryKey,
     NotNull,
-    Unique,
+    UniqueKey,
 }
 
 #[derive(Debug)]
@@ -70,8 +72,17 @@ pub struct DropStatement {
 #[derive(Debug)]
 pub struct SelectStatement {
     pub columns: Vec<SelectColumn>,
-    pub from: Option<String>,
+    pub from: String,
     pub where_clause: Option<WhereClause>,
+    pub order_by: Option<Vec<OrderByClause>>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug)]
+pub struct OrderByClause {
+    pub column_name: String,
+    pub is_asec: bool,
 }
 
 #[derive(Debug)]
@@ -91,6 +102,19 @@ pub enum Condition {
     Logical(LogicalCondition),
     Not(Box<Condition>),
     NullCheck(NullCheckCondition),
+    In(InCondition),
+}
+
+#[derive(Debug)]
+pub struct InCondition {
+    pub left: Expression,
+    pub values: InValues,
+}
+
+#[derive(Debug)]
+pub enum InValues {
+    List(Option<Vec<Expression>>),
+    Subquery(Option<Box<SelectStatement>>),
 }
 
 #[derive(Debug)]
@@ -108,7 +132,7 @@ pub enum NullCheckCondition {
 
 #[derive(Debug)]
 pub enum ComparisonOperator {
-    Equal,
+    EqualTo,
     NotEqual,
     GreaterThan,
     LessThan,
@@ -128,6 +152,15 @@ pub enum LogicalOperator {
     And,
     Or,
 }
+impl LogicalOperator {
+    pub fn match_sql_token_to_operator(sql_token: Types) -> Result<LogicalOperator, String> {
+        match sql_token {
+            Types::And => Ok(LogicalOperator::And),
+            Types::Or => Ok(LogicalOperator::Or),
+            _ => Err("unexpected token".to_string()),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum Expression {
@@ -138,6 +171,7 @@ pub enum Expression {
 #[derive(Debug)]
 pub enum Literal {
     String(String),
-    Number(f64),
+    Number(i64),
+    Decimal(f64),
     Boolean(bool),
 }
