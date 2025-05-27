@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use super::tokens::{ParsedLiteral, Token, Types};
 
-pub(crate) struct Scanner {
+pub struct Scanner {
     source: String,
     start: usize,
     current: usize,

@@ -262,13 +262,13 @@ impl Parser {
                     self.consume(Types::Not, "")?;
                     self.consume(Types::Null, "expected NULL")?;
 
-                    return Ok(Condition::NullCheck(NullCheckCondition::IsNotNull {
-                        identifier: lhs.lexeme.clone(),
-                    }));
+                    return Ok(Condition::NullCheck(NullCheckCondition::IsNotNull(
+                        self.parse_expression_for_input(lhs)?,
+                    )));
                 } else if self.peek().token_type == Types::Null {
-                    return Ok(Condition::NullCheck(NullCheckCondition::IsNull {
-                        identifier: lhs.lexeme.clone(),
-                    }));
+                    return Ok(Condition::NullCheck(NullCheckCondition::IsNull(
+                        self.parse_expression_for_input(lhs)?,
+                    )));
                 } else {
                     Err(format!(
                         "unexpected token:{} found after IS at line:{}, column:{}",

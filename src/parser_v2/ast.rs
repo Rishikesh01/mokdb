@@ -75,8 +75,8 @@ pub struct SelectStatement {
     pub from: String,
     pub where_clause: Option<WhereClause>,
     pub order_by: Option<Vec<OrderByClause>>,
-    pub limit: Option<i64>,
-    pub offset: Option<i64>,
+    pub limit: Option<u64>,
+    pub offset: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -126,8 +126,8 @@ pub struct ComparisonCondition {
 
 #[derive(Debug)]
 pub enum NullCheckCondition {
-    IsNull { identifier: String },
-    IsNotNull { identifier: String },
+    IsNull(Expression),
+    IsNotNull(Expression),
 }
 
 #[derive(Debug)]
@@ -166,6 +166,19 @@ impl LogicalOperator {
 pub enum Expression {
     Identifier(String),
     Literal(Literal),
+    BinaryOp {
+        left: Box<Expression>,
+        right: Box<Expression>,
+        op: BinaryOperators,
+    },
+}
+
+#[derive(Debug)]
+pub enum BinaryOperators {
+    Add,
+    Sub,
+    Multiply,
+    Divide,
 }
 
 #[derive(Debug)]
