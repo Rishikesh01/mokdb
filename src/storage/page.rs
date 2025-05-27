@@ -1,8 +1,9 @@
-const PAGE_SIZE: usize = 8192;
+pub const PAGE_SIZE: usize = 8192;
 const MAX_SLOTS: usize = 256;
 const HEADER_SIZE: usize = std::mem::size_of::<PageHeader>();
 const SLOT_SIZE: usize = std::mem::size_of::<Slot>();
 const DATA_SIZE: usize = PAGE_SIZE - HEADER_SIZE - (SLOT_SIZE * MAX_SLOTS);
+const TUPLE_HEADER_SIZE: usize = std::mem::size_of::<TupleHeader>();
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -23,9 +24,11 @@ pub struct Slot {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct TupleHeader {
-    pub xmin: u64,
-    pub xmax: u64,
-    pub length_of_tuple: usize,
+    pub xmin: u64,     // 0..8
+    pub xmax: u64,     // 8..16
+    pub page_no: u64,  // 16..24
+    pub slot_no: u16,  // 24..26
+    pub _pad: [u8; 6], // 26..32 (explicit padding)
 }
 
 #[repr(C)]
@@ -34,6 +37,8 @@ pub struct Page {
     pub slots: [Slot; MAX_SLOTS],
     pub data: [u8; DATA_SIZE],
 }
+
+trait PageManager {}
 
 impl PageHeader {
     fn new() -> Self {
@@ -45,35 +50,40 @@ impl PageHeader {
 }
 
 impl TupleHeader {
-    fn new(xmin: u64, xmax: u64, length_of_tuple: usize) -> Self {
+    fn new(xmin: u64, xmax: u64, page_no: u64, slot_no: u16) -> Self {
         TupleHeader {
             xmin,
             xmax,
-            length_of_tuple,
+            page_no,
+            slot_no,
+            _pad: [0u8; 6],
         }
     }
+    pub fn is_visible(&self, txid: u64) -> bool {
+        self.xmin <= txid && (self.xmax == 0 || txid < self.xmax)
+    }
 
-    pub fn to_bytes(&self) -> [u8; 20] {
-        let mut buf = [0u8; 20];
+    pub fn to_bytes(&self) -> [u8; 32] {
+        let mut buf = [0u8; 32];
         buf[..8].copy_from_slice(&self.xmin.to_le_bytes());
         buf[8..16].copy_from_slice(&self.xmax.to_le_bytes());
-        buf[16..20].copy_from_slice(&self.length_of_tuple.to_le_bytes());
+        buf[16..24].copy_from_slice(&self.page_no.to_le_bytes());
+        buf[24..26].copy_from_slice(&self.slot_no.to_le_bytes());
+        buf[26..32].copy_from_slice(&self._pad); // optional, can be left zero
         buf
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 20 {
+        if bytes.len() < 32 {
             return None;
         }
 
-        let xmin = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
-        let xmax = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
-        let length_of_tuple = usize::from_le_bytes(bytes[16..20].try_into().unwrap());
-
         Some(Self {
-            xmin,
-            xmax,
-            length_of_tuple,
+            xmin: u64::from_le_bytes(bytes[0..8].try_into().ok()?),
+            xmax: u64::from_le_bytes(bytes[8..16].try_into().ok()?),
+            page_no: u64::from_le_bytes(bytes[16..24].try_into().ok()?),
+            slot_no: u16::from_le_bytes(bytes[24..26].try_into().ok()?),
+            _pad: bytes[26..32].try_into().ok()?,
         })
     }
 }
@@ -90,7 +100,7 @@ impl Slot {
 }
 
 impl Page {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Page {
             header: PageHeader::new(),
             slots: [Slot::new(); MAX_SLOTS],
@@ -138,14 +148,14 @@ impl Page {
         None
     }
 
-    fn insert_tuple(
+    pub fn insert_tuple(
         &mut self,
         xmin: u64,
         xmax: u64,
+        page_no: u64,
         tuple_data: &[u8],
     ) -> Result<usize, &'static str> {
-        let tuple_header_size = size_of::<TupleHeader>();
-        let total_tuple_len = tuple_header_size + tuple_data.len();
+        let total_tuple_len = TUPLE_HEADER_SIZE + tuple_data.len();
 
         if (total_tuple_len as u16) > self.header.free_space {
             return Err("Not enough free space");
@@ -159,20 +169,20 @@ impl Page {
         if (offset + (total_tuple_len as u16)) > self.data.len() as u16 {
             return Err("Not enough contiguous space");
         }
-        let tuple_header = TupleHeader::new(xmin, xmax, total_tuple_len);
+        let tuple_header = TupleHeader::new(xmin, xmax, page_no, slot_index as u16);
 
         let offset_in_usize = offset as usize;
 
         // add header first
-        self.data[offset_in_usize..offset_in_usize + tuple_header_size]
+        self.data[offset_in_usize..offset_in_usize + TUPLE_HEADER_SIZE]
             .copy_from_slice(&tuple_header.to_bytes());
 
         // add actual tuple first
-        self.data[offset_in_usize + tuple_header_size..offset_in_usize + total_tuple_len]
+        self.data[offset_in_usize + TUPLE_HEADER_SIZE..offset_in_usize + total_tuple_len]
             .copy_from_slice(tuple_data);
 
         let slot = &mut self.slots[slot_index];
-        slot.offset = offset as u16;
+        slot.offset = offset;
         slot.length = total_tuple_len as u16;
         slot.is_used = 1;
 
@@ -180,5 +190,44 @@ impl Page {
         self.header.total_free_slots -= 1;
 
         Ok(slot_index)
+    }
+
+    fn read_slot(&self, index: usize) -> Option<(TupleHeader, &[u8])> {
+        if index >= MAX_SLOTS {
+            return None;
+        }
+
+        let slot = &self.slots[index];
+        if slot.is_used == 0 || slot.length == 0 {
+            return None;
+        }
+
+        let offset = slot.offset as usize;
+        let start = offset + TUPLE_HEADER_SIZE;
+        let end = offset + slot.length as usize;
+        if end > self.data.len() {
+            return None;
+        }
+        let header = TupleHeader::from_bytes(&self.data[offset..offset + TUPLE_HEADER_SIZE])?;
+
+        Some((header, &self.data[start..end]))
+    }
+
+    fn scan_page(&self, txid: u64) -> Vec<(TupleHeader, &[u8])> {
+        let mut result = Vec::new();
+
+        for (i, slot) in self.slots.iter().enumerate() {
+            if slot.is_used == 0 || slot.length == 0 {
+                continue;
+            }
+
+            if let Some((header, data)) = self.read_slot(i) {
+                if header.is_visible(txid) {
+                    result.push((header, data));
+                }
+            }
+        }
+
+        result
     }
 }
