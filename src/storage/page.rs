@@ -1,3 +1,5 @@
+use std::io;
+
 pub const PAGE_SIZE: usize = 8192;
 const MAX_SLOTS: usize = 256;
 const HEADER_SIZE: usize = std::mem::size_of::<PageHeader>();
@@ -33,12 +35,11 @@ pub struct TupleHeader {
 
 #[repr(C)]
 pub struct Page {
+    pub id: u64,
     pub header: PageHeader,
     pub slots: [Slot; MAX_SLOTS],
     pub data: [u8; DATA_SIZE],
 }
-
-trait PageManager {}
 
 impl PageHeader {
     fn new() -> Self {
@@ -100,8 +101,9 @@ impl Slot {
 }
 
 impl Page {
-    pub fn new() -> Self {
-        Page {
+    pub fn new(id: u64) -> Self {
+        Self {
+            id,
             header: PageHeader::new(),
             slots: [Slot::new(); MAX_SLOTS],
             data: [0; DATA_SIZE],
@@ -229,5 +231,119 @@ impl Page {
         }
 
         result
+    }
+
+    fn read_all_slots(&self) -> Vec<(usize, TupleHeader, &[u8])> {
+        let mut results = Vec::new();
+        for (i, slot) in self.slots.iter().enumerate() {
+            if slot.is_used == 0 {
+                continue;
+            }
+            if let Some((header, data)) = self.read_slot(i) {
+                results.push((i, header, data));
+            }
+        }
+        results
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(PAGE_SIZE);
+
+        buf.extend(&self.id.to_le_bytes());
+        buf.extend(&self.header.free_space.to_le_bytes());
+
+        // Serialize slots
+        for slot in self.slots.iter() {
+            buf.extend(&slot.offset.to_le_bytes());
+            buf.extend(&slot.length.to_le_bytes());
+            buf.push(slot.is_used);
+            buf.extend(&slot._pad); // 1 byte
+        }
+
+        // Pad if needed (depends on padding inside Slot)
+        let slots_bytes = MAX_SLOTS * (2 + 2 + 1 + 1); // 6 bytes per slot
+        let expected_header_and_slots = 2 + 2 + slots_bytes;
+
+        // If any padding is needed to reach data start, add it
+        while buf.len() < expected_header_and_slots {
+            buf.push(0);
+        }
+
+        // Serialize data
+        buf.extend_from_slice(&self.data);
+
+        // Final padding (just to be sure)
+        while buf.len() < PAGE_SIZE {
+            buf.push(0);
+        }
+
+        debug_assert_eq!(buf.len(), PAGE_SIZE);
+        buf
+    }
+
+    pub fn from_bytes(buf: &[u8]) -> io::Result<Self> {
+        if buf.len() != PAGE_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid page size",
+            ));
+        }
+
+        let mut offset = 0;
+
+        // Read Page ID
+        let id = u64::from_le_bytes(buf[offset..offset + 8].try_into().unwrap());
+        offset += 8;
+
+        // Read Header
+        let free_space = u16::from_le_bytes(buf[offset..offset + 2].try_into().unwrap());
+        offset += 2;
+        let total_free_slots = u16::from_le_bytes(buf[offset..offset + 2].try_into().unwrap());
+        offset += 2;
+
+        let header = PageHeader {
+            free_space,
+            total_free_slots,
+        };
+
+        // Read Slots
+        let mut slots = [Slot {
+            offset: 0,
+            length: 0,
+            is_used: 0,
+            _pad: [0],
+        }; MAX_SLOTS];
+
+        for i in 0..MAX_SLOTS {
+            let offset_val = u16::from_le_bytes(buf[offset..offset + 2].try_into().unwrap());
+            offset += 2;
+
+            let length_val = u16::from_le_bytes(buf[offset..offset + 2].try_into().unwrap());
+            offset += 2;
+
+            let is_used = buf[offset];
+            offset += 1;
+
+            let pad = [buf[offset]];
+            offset += 1;
+
+            slots[i] = Slot {
+                offset: offset_val,
+                length: length_val,
+                is_used,
+                _pad: pad,
+            };
+        }
+
+        // Read Data
+        let mut data = [0u8; DATA_SIZE];
+        data.copy_from_slice(&buf[offset..offset + DATA_SIZE]);
+
+        Ok(Page {
+            id,
+            header,
+            slots,
+            data,
+        })
     }
 }
