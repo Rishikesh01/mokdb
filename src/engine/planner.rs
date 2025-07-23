@@ -1,3 +1,5 @@
+use std::{collections::HashSet, slice::Iter};
+
 use crate::{
     err::DatabaseErrors,
     parser_v2::ast::{
@@ -40,93 +42,81 @@ impl QueryPlanner {
         select_statement: SelectStatement,
     ) -> Result<QueryNodes, DatabaseErrors> {
         {
-            if let Some(metadata) = self
+            let metadata = self
                 .catalog_manager
                 .get_table_metadata(&select_statement.from)
-            {
-                let mut columns_to_select: Vec<String> = Vec::new();
-                for col in select_statement.columns {
-                    match col {
-                        SelectColumn::All => columns_to_select
-                            .extend(metadata.columns.iter().map(|x| x.name.clone())),
-                        SelectColumn::Column(v) => {
-                            if metadata.column_set.contains(&v) {
-                                columns_to_select.push(v.clone());
-                            }
-                            return Err(DatabaseErrors::ColumnNotFoundInTable {
-                                column: v.to_string(),
-                                table: select_statement.from.clone(),
-                            });
-                        }
+                .ok_or(DatabaseErrors::TableNotFound(select_statement.from.clone()))?;
+
+            let columns_to_select = Self::verify_select_column_exists(
+                &select_statement.from,
+                select_statement.columns.iter(),
+                &metadata.column_set,
+            )?;
+
+            let mut query_node = QueryNodes::Scan(Scan {
+                table_name: select_statement.from.clone(),
+            });
+
+            let column_set = metadata.column_set.clone();
+            if let Some(filter) = select_statement.where_clause {
+                let columns_to_filter_on = self.walk_where_clause(filter.condition);
+
+                for col in columns_to_filter_on.iter().filter_map(|expr| {
+                    if let Expr::Column(col) = expr {
+                        Some(col)
+                    } else {
+                        None
+                    }
+                }) {
+                    if !column_set.contains(col) {
+                        return Err(DatabaseErrors::ColumnNotFoundInTable {
+                            column: col.to_string(),
+                            table: select_statement.from.clone(),
+                        });
                     }
                 }
 
-                let mut query_node = QueryNodes::Scan(Scan {
-                    table_name: select_statement.from.clone(),
+                query_node = QueryNodes::Filter(Filter {
+                    conditions: columns_to_filter_on,
+                    scan_node: Box::new(query_node),
                 });
-
-                let column_set = metadata.column_set.clone(); // Clone if needed
-                if let Some(filter) = select_statement.where_clause {
-                    let columns_to_filter_on = self.walk_where_clause(filter.condition);
-
-                    for col in columns_to_filter_on.iter().filter_map(|expr| {
-                        if let Expr::Column(col) = expr {
-                            Some(col)
-                        } else {
-                            None
-                        }
-                    }) {
-                        if !column_set.contains(col) {
-                            return Err(DatabaseErrors::ColumnNotFoundInTable {
-                                column: col.to_string(),
-                                table: select_statement.from.clone(),
-                            });
-                        }
-                    }
-
-                    query_node = QueryNodes::Filter(Filter {
-                        conditions: columns_to_filter_on,
-                        scan_node: Box::new(query_node),
-                    });
-                }
-
-                if select_statement.limit.is_some() || select_statement.offset.is_some() {
-                    query_node = QueryNodes::Limit(Limit {
-                        limit: select_statement.limit,
-                        offset: select_statement.offset,
-                        query_node: Box::new(query_node),
-                    })
-                }
-
-                if let Some(order) = select_statement.order_by {
-                    for col in order.iter() {
-                        if !column_set.contains(&col.column_name.clone()) {
-                            return Err(DatabaseErrors::ColumnNotFoundInTable {
-                                column: col.column_name.to_string(),
-                                table: select_statement.from.clone(),
-                            });
-                        }
-                    }
-
-                    query_node = QueryNodes::Sort(Sorting {
-                        column_to_sort: order
-                            .iter()
-                            .map(|x| Expr::Column(x.column_name.clone()))
-                            .collect(),
-                        ordering_type: order
-                            .iter()
-                            .map(|x| Expr::SortingOrder(SortingOrder { is_asc: x.is_asec }))
-                            .collect(),
-                        query_node: Box::new(query_node),
-                    });
-                }
-
-                return Ok(QueryNodes::Project(Project {
-                    projections: columns_to_select,
-                    query_node: Box::new(query_node),
-                }));
             }
-            Err(DatabaseErrors::TableNotFound(select_statement.from.clone()))
+
+            if select_statement.limit.is_some() || select_statement.offset.is_some() {
+                query_node = QueryNodes::Limit(Limit {
+                    limit: select_statement.limit,
+                    offset: select_statement.offset,
+                    query_node: Box::new(query_node),
+                })
+            }
+
+            if let Some(order) = select_statement.order_by {
+                for col in order.iter() {
+                    if !column_set.contains(&col.column_name.clone()) {
+                        return Err(DatabaseErrors::ColumnNotFoundInTable {
+                            column: col.column_name.to_string(),
+                            table: select_statement.from.clone(),
+                        });
+                    }
+                }
+
+                query_node = QueryNodes::Sort(Sorting {
+                    column_to_sort: order
+                        .iter()
+                        .map(|x| Expr::Column(x.column_name.clone()))
+                        .collect(),
+                    ordering_type: order
+                        .iter()
+                        .map(|x| Expr::SortingOrder(SortingOrder { is_asc: x.is_asec }))
+                        .collect(),
+                    query_node: Box::new(query_node),
+                });
+            }
+
+            return Ok(QueryNodes::Project(Project {
+                projections: columns_to_select,
+                query_node: Box::new(query_node),
+            }));
         }
     }
 
@@ -352,5 +342,27 @@ impl QueryPlanner {
             Literal::Decimal(d) => DataType::Decimal(*d),
             Literal::Boolean(b) => DataType::Boolean(*b),
         }
+    }
+    fn verify_select_column_exists(
+        table_name: &String,
+        projected_columns: Iter<SelectColumn>,
+        actual_columns: &HashSet<String>,
+    ) -> Result<Vec<String>, DatabaseErrors> {
+        let mut columns_to_select = vec![];
+        for col in projected_columns {
+            match col {
+                SelectColumn::All => columns_to_select.extend(actual_columns.iter().cloned()),
+                SelectColumn::Column(v) => {
+                    if actual_columns.contains(v) {
+                        columns_to_select.push(v.clone());
+                    }
+                    return Err(DatabaseErrors::ColumnNotFoundInTable {
+                        column: v.to_string(),
+                        table: table_name.clone(),
+                    });
+                }
+            }
+        }
+        Ok(columns_to_select)
     }
 }
