@@ -7,7 +7,7 @@ use crate::{
         Literal, LogicalOperator, NullCheckCondition, SQLStatement, SelectColumn, SelectStatement,
         UpdateStatement,
     },
-    storage::catalog_manager::CatalogManager,
+    storage::catalog_manager::{CatalogManager, Column, ColumnDataType},
 };
 
 use super::query_structure::{
@@ -24,7 +24,7 @@ impl QueryPlanner {
         Self { catalog_manager }
     }
     pub fn prepare_logical_query_plan(
-        &mut self,
+        &self,
         ast: SQLStatement,
     ) -> Result<QueryNodes, DatabaseErrors> {
         match ast {
@@ -37,91 +37,93 @@ impl QueryPlanner {
         }
     }
 
-    fn projection(
-        &mut self,
-        select_statement: SelectStatement,
-    ) -> Result<QueryNodes, DatabaseErrors> {
-        {
-            let metadata = self
-                .catalog_manager
-                .get_table_metadata(&select_statement.from)
-                .ok_or(DatabaseErrors::TableNotFound(select_statement.from.clone()))?;
+    fn projection(&self, select_statement: SelectStatement) -> Result<QueryNodes, DatabaseErrors> {
+        let metadata = self
+            .catalog_manager
+            .get_table_metadata(&select_statement.from)
+            .ok_or(DatabaseErrors::TableNotFound(select_statement.from.clone()))?;
 
-            let columns_to_select = Self::verify_select_column_exists(
-                &select_statement.from,
-                select_statement.columns.iter(),
-                &metadata.column_set,
-            )?;
+        let columns_to_select = Self::verify_select_column_exists(
+            &select_statement.from,
+            select_statement.columns.iter(),
+            &metadata.column_set,
+        )?;
 
-            let mut query_node = QueryNodes::Scan(Scan {
-                table_name: select_statement.from.clone(),
+        let mut query_node = QueryNodes::Scan(Scan {
+            table_name: select_statement.from.clone(),
+        });
+
+        let column_set = &metadata.column_set;
+
+        if let Some(filter) = select_statement.where_clause {
+            let columns_to_filter_on = self.walk_where_clause(filter.condition);
+
+            for col in columns_to_filter_on.iter().filter_map(|expr| {
+                if let Expr::Column(col) = expr {
+                    Some(col)
+                } else {
+                    None
+                }
+            }) {
+                if !column_set.contains(col) {
+                    return Err(DatabaseErrors::ColumnNotFoundInTable {
+                        column: col.to_string(),
+                        table: select_statement.from.clone(),
+                    });
+                }
+            }
+
+            query_node = QueryNodes::Filter(Filter {
+                conditions: columns_to_filter_on,
+                scan_node: Box::new(query_node),
             });
-
-            let column_set = metadata.column_set.clone();
-            if let Some(filter) = select_statement.where_clause {
-                let columns_to_filter_on = self.walk_where_clause(filter.condition);
-
-                for col in columns_to_filter_on.iter().filter_map(|expr| {
-                    if let Expr::Column(col) = expr {
-                        Some(col)
-                    } else {
-                        None
-                    }
-                }) {
-                    if !column_set.contains(col) {
-                        return Err(DatabaseErrors::ColumnNotFoundInTable {
-                            column: col.to_string(),
-                            table: select_statement.from.clone(),
-                        });
-                    }
-                }
-
-                query_node = QueryNodes::Filter(Filter {
-                    conditions: columns_to_filter_on,
-                    scan_node: Box::new(query_node),
-                });
-            }
-
-            if select_statement.limit.is_some() || select_statement.offset.is_some() {
-                query_node = QueryNodes::Limit(Limit {
-                    limit: select_statement.limit,
-                    offset: select_statement.offset,
-                    query_node: Box::new(query_node),
-                })
-            }
-
-            if let Some(order) = select_statement.order_by {
-                for col in order.iter() {
-                    if !column_set.contains(&col.column_name.clone()) {
-                        return Err(DatabaseErrors::ColumnNotFoundInTable {
-                            column: col.column_name.to_string(),
-                            table: select_statement.from.clone(),
-                        });
-                    }
-                }
-
-                query_node = QueryNodes::Sort(Sorting {
-                    column_to_sort: order
-                        .iter()
-                        .map(|x| Expr::Column(x.column_name.clone()))
-                        .collect(),
-                    ordering_type: order
-                        .iter()
-                        .map(|x| Expr::SortingOrder(SortingOrder { is_asc: x.is_asec }))
-                        .collect(),
-                    query_node: Box::new(query_node),
-                });
-            }
-
-            return Ok(QueryNodes::Project(Project {
-                projections: columns_to_select,
-                query_node: Box::new(query_node),
-            }));
         }
+
+        if select_statement.limit.is_some() || select_statement.offset.is_some() {
+            query_node = QueryNodes::Limit(Limit {
+                limit: select_statement.limit,
+                offset: select_statement.offset,
+                query_node: Box::new(query_node),
+            })
+        }
+
+        if let Some(order) = select_statement.order_by {
+            // Validate columns exist without cloning
+            for col in &order {
+                if !column_set.contains(&col.column_name) {
+                    return Err(DatabaseErrors::ColumnNotFoundInTable {
+                        column: col.column_name.to_string(),
+                        table: select_statement.from.clone(),
+                    });
+                }
+            }
+
+            // Use into_iter to move values instead of cloning
+            let (column_to_sort, ordering_type): (Vec<_>, Vec<_>) = order
+                .into_iter()
+                .map(|x| {
+                    (
+                        Expr::Column(x.column_name),
+                        Expr::SortingOrder(SortingOrder { is_asc: x.is_asec }),
+                    )
+                })
+                .unzip();
+
+            query_node = QueryNodes::Sort(Sorting {
+                column_to_sort,
+                ordering_type,
+                query_node: Box::new(query_node),
+            });
+        }
+
+        Ok(QueryNodes::Project(Project {
+            projections: columns_to_select,
+            query_node: Box::new(query_node),
+        }))
     }
 
     fn insertion_of_rows(
-        &mut self,
+        &self,
         insert_statement: InsertStatement,
     ) -> Result<QueryNodes, DatabaseErrors> {
         if let Some(metadata) = self
@@ -166,7 +168,7 @@ impl QueryPlanner {
     }
 
     fn updation_of_rows(
-        &mut self,
+        &self,
         update_statement: UpdateStatement,
     ) -> Result<QueryNodes, DatabaseErrors> {
         if let Some(metadata) = self
@@ -197,7 +199,7 @@ impl QueryPlanner {
     }
 
     fn deletion_of_rows(
-        &mut self,
+        &self,
         delete_statement: DeleteStatement,
     ) -> Result<QueryNodes, DatabaseErrors> {
         if let Some(metadata) = self
@@ -241,13 +243,13 @@ impl QueryPlanner {
         Err(DatabaseErrors::TableNotFound(delete_statement.table))
     }
 
-    fn walk_where_clause(&mut self, condition: Condition) -> Vec<Expr> {
+    fn walk_where_clause(&self, condition: Condition) -> Vec<Expr> {
         let mut filter_conditions = vec![];
         self.condition_walker(condition, &mut filter_conditions);
         filter_conditions
     }
 
-    fn condition_walker(&mut self, condition: Condition, filter_conditions: &mut Vec<Expr>) {
+    fn condition_walker(&self, condition: Condition, filter_conditions: &mut Vec<Expr>) {
         match condition {
             Condition::Comparison(comparison_condition) => {
                 filter_conditions.push(match comparison_condition.left {
@@ -344,7 +346,7 @@ impl QueryPlanner {
         }
     }
     fn verify_select_column_exists(
-        table_name: &String,
+        table_name: &str,
         projected_columns: Iter<SelectColumn>,
         actual_columns: &HashSet<String>,
     ) -> Result<Vec<String>, DatabaseErrors> {
@@ -358,7 +360,7 @@ impl QueryPlanner {
                     }
                     return Err(DatabaseErrors::ColumnNotFoundInTable {
                         column: v.to_string(),
-                        table: table_name.clone(),
+                        table: table_name.to_string(),
                     });
                 }
             }
