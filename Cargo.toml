@@ -7,7 +7,9 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
+dashmap = { version = "6.1.0" }
 thiserror = "2"
+parking_lot = "0.12.5"
 
 [dev-dependencies]
 pretty_assertions = "1"

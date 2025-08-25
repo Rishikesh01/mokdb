@@ -207,14 +207,20 @@ impl Parser {
                         self.advance(); // consume the operator
                         let rhs = self.parse_expression()?;
                         return Ok(Expression::BinaryOp(Box::new(BinaryOp {
-                            lhs: Expression::Literal(Self::literal_value(data_type)),
+                            lhs: Expression::Literal {
+                                data_type: Self::literal_value(data_type),
+                                alias: None,
+                            },
                             rhs,
                             operator,
                         })));
                     }
                 }
 
-                Ok(Expression::Literal(Self::literal_value(data_type)))
+                Ok(Expression::Literal {
+                    data_type: Self::literal_value(data_type),
+                    alias: None,
+                })
             }
 
             Syntax::OpenParen => {
@@ -371,7 +377,10 @@ impl Parser {
 
                 Ok(Condition::Comparison(Equality {
                     lhs,
-                    rhs: Expression::Literal(DataType::Boolean(true)),
+                    rhs: Expression::Literal {
+                        data_type: DataType::Boolean(true),
+                        alias: None,
+                    },
                     operator: ComparisonOperator::Eq,
                 }))
             }
@@ -697,7 +706,7 @@ impl Parser {
         self.consume_syntax(Syntax::Table)?;
         let table_name = self.consume_syntax(Syntax::Identifier)?;
         if table_name.lexeme.len() > 100 {
-            return Err(MokErrors::Custom("table name max limit crossed".into()));
+            return Err(MokErrors::TableNameMaxLimitCrossed);
         }
 
         self.consume_syntax(Syntax::OpenParen)?;
@@ -1178,11 +1187,14 @@ impl Parser {
                     }
                     Ok(Statement::ExplicitTransaction)
                 }
+                Syntax::Rollback => {
+                    self.consume_current().ok_or(MokErrors::UnexpectedEof)?;
+                    self.consume_syntax(Syntax::Semicolon)?;
+                    Ok(Statement::ExplicitRollBack)
+                }
                 Syntax::Commit => {
                     self.consume_current().ok_or(MokErrors::UnexpectedEof)?;
-                    if expect_semicolon {
-                        self.consume_syntax(Syntax::Semicolon)?;
-                    }
+                    self.consume_syntax(Syntax::Semicolon)?;
                     Ok(Statement::ExplicitTransactionCommit)
                 }
                 Syntax::Select | Syntax::With => self.parse_select_statement(expect_semicolon),

@@ -80,6 +80,7 @@ pub enum Syntax {
     References,
     Begin,
     Commit,
+    Rollback,
 }
 
 impl Syntax {
@@ -157,6 +158,7 @@ impl Syntax {
             Syntax::Table => "table".into(),
             Syntax::Begin => "begin".into(),
             Syntax::Commit => "commit".into(),
+            Syntax::Rollback => "rollback".into(),
         }
     }
 }

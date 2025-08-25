@@ -8,6 +8,7 @@ pub enum Statement {
     CreateStmt(Create),
     ExplicitTransaction,
     ExplicitTransactionCommit,
+    ExplicitRollBack,
 }
 
 #[derive(Debug, PartialEq)]
@@ -120,8 +121,14 @@ pub enum JoinType {
 
 #[derive(Debug, PartialEq)]
 pub enum Expression {
-    Identifier { table: Option<String>, name: String },
-    Literal(DataType),
+    Identifier {
+        table: Option<String>,
+        name: String,
+    },
+    Literal {
+        data_type: DataType,
+        alias: Option<String>,
+    },
     BinaryOp(Box<BinaryOp>),
 }
 

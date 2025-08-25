@@ -39,9 +39,9 @@ fn test_insert_statement() {
                 columns: vec!["id".into(), "name".into(), "active".into()],
                 sub_select: None,
                 values: Some(vec![
-                    Expression::Literal(DataType::Int(1)),
-                    Expression::Literal(DataType::Text("foo".into())),
-                    Expression::Literal(DataType::Boolean(true)),
+                    Expression::Literal{data_type: DataType::Int(1),alias: None},
+                    Expression::Literal{data_type:DataType::Text("foo".into()),alias:None},
+                    Expression::Literal{data_type:DataType::Boolean(true),alias:None},
                 ]),
                 returning: None,
             })]),
@@ -69,7 +69,7 @@ fn test_insert_statement() {
                     from: TableRef::Table { name: "users".into(), alias: None },
                     where_clause: Some(Condition::Comparison(Equality {
                         lhs: Expression::Identifier { table: None, name: "active".into() },
-                        rhs: Expression::Literal(DataType::Boolean(false)),
+                        rhs: Expression::Literal{data_type: DataType::Boolean(false),alias:None},
                         operator: ComparisonOperator::Eq,
                     })),
                     group_by: None,
@@ -96,14 +96,14 @@ fn test_update_statement() {
                 table: "users".into(),
                 assignments: vec![(
                     "name".into(),
-                    Expression::Literal(DataType::Text("bar".into())),
+                    Expression::Literal{data_type: DataType::Text("bar".into()),alias:None},
                 )],
                 where_clause: Some(Condition::Comparison(Equality {
                     lhs: Expression::Identifier {
                         table: None,
                         name: "id".into(),
                     },
-                    rhs: Expression::Literal(DataType::Int(1)),
+                    rhs: Expression::Literal{data_type:DataType::Int(1),alias:None},
                     operator: ComparisonOperator::Eq,
                 })),
                 returning: None,
@@ -117,7 +117,7 @@ fn test_update_statement() {
                 table: "users".into(),
                 assignments: vec![(
                     "active".into(),
-                    Expression::Literal(DataType::Boolean(false)),
+                    Expression::Literal{data_type:DataType::Boolean(false),alias:None},
                 )],
                 where_clause: None,
                 returning: Some(vec![
@@ -153,7 +153,7 @@ fn test_delete_statement() {
                         table: None,
                         name: "id".into(),
                     },
-                    rhs: Expression::Literal(DataType::Int(42)),
+                    rhs: Expression::Literal{data_type:DataType::Int(42),alias:None},
                     operator: ComparisonOperator::Eq,
                 })),
                 returning: None,
@@ -173,7 +173,7 @@ fn test_delete_statement() {
                         table: None,
                         name: "status".into(),
                     },
-                    rhs: Expression::Literal(DataType::Text("cancelled".into())),
+                    rhs: Expression::Literal{data_type:DataType::Text("cancelled".into()),alias:None},
                     operator: ComparisonOperator::Eq,
                 })),
                 returning: Some(vec![Expression::Identifier {
@@ -308,7 +308,7 @@ fn test_select_statements() {
                                 table: None,
                                 name: "name".into(),
                             },
-                            rhs: Expression::Literal(DataType::Text("foo".to_string())),
+                            rhs: Expression::Literal{data_type:DataType::Text("foo".to_string()),alias:None},
                             operator: ComparisonOperator::Eq,
                         })),
                         rhs: Box::new(Condition::Comparison(Equality {
@@ -316,7 +316,7 @@ fn test_select_statements() {
                                 table: None,
                                 name: "username".into(),
                             },
-                            rhs: Expression::Literal(DataType::Text("bar".to_string())),
+                            rhs: Expression::Literal{data_type:DataType::Text("bar".to_string()),alias:None},
                             operator: ComparisonOperator::Eq,
                         })),
                         operator: LogicalOperator::And,
@@ -326,7 +326,7 @@ fn test_select_statements() {
                             table: None,
                             name: "username".into(),
                         },
-                        rhs: Expression::Literal(DataType::Text("chippy".to_string())),
+                        rhs: Expression::Literal{data_type:DataType::Text("chippy".to_string()),alias:None},
                         operator: ComparisonOperator::Eq,
                     })),
                     operator: LogicalOperator::Or,
@@ -355,7 +355,7 @@ fn test_select_statements() {
                             table: None,
                             name: "name".into(),
                         },
-                        rhs: Expression::Literal(DataType::Text("foo".to_string())),
+                        rhs: Expression::Literal{data_type:DataType::Text("foo".to_string()),alias:None},
                         operator: ComparisonOperator::Eq,
                     })),
                     rhs: Box::new(Condition::Logical(Logical {
@@ -364,7 +364,7 @@ fn test_select_statements() {
                                 table: None,
                                 name: "username".into(),
                             },
-                            rhs: Expression::Literal(DataType::Text("bar".to_string())),
+                            rhs: Expression::Literal{data_type:DataType::Text("bar".to_string()),alias:None},
                             operator: ComparisonOperator::Eq,
                         })),
                         rhs: Box::new(Condition::Comparison(Equality {
@@ -372,7 +372,7 @@ fn test_select_statements() {
                                 table: None,
                                 name: "username".into(),
                             },
-                            rhs: Expression::Literal(DataType::Text("chippy".to_string())),
+                            rhs: Expression::Literal{data_type:DataType::Text("chippy".to_string()),alias:None},
                             operator: ComparisonOperator::Eq,
                         })),
                         operator: LogicalOperator::Or,
@@ -577,6 +577,111 @@ fn test_select_statements() {
                 offset: None,
             })]),
         },
+        SqlQuery{ 
+            number: 9, 
+            name: "JOIN without alias",
+            stmt:"WITH orders AS (
+                SELECT id, item, user_id FROM orders
+               )
+              SELECT name, item
+              FROM orders AS o
+              JOIN users AS u ON o.user_id = u.id;" ,
+            expected: Ok(vec![
+                Statement::SelectStmt(
+                    Select {
+                        with: Some(vec![
+                            Cte {
+                                name: "orders".to_string(),
+                                query: Box::new(Statement::SelectStmt(
+                                    Select {
+                                        with: None,
+                                        distinct: None,
+                                        projection: Projections::Specified(vec![
+                                            ProjectionsItem {
+                                                expr: Expression::Identifier {
+                                                    table: None,
+                                                    name: "id".to_string(),
+                                                },
+                                                alias: None,
+                                            },
+                                            ProjectionsItem {
+                                                expr: Expression::Identifier {
+                                                    table: None,
+                                                    name: "item".to_string(),
+                                                },
+                                                alias: None,
+                                            },
+                                            ProjectionsItem {
+                                                expr: Expression::Identifier {
+                                                    table: None,
+                                                    name: "user_id".to_string(),
+                                                },
+                                                alias: None,
+                                            },
+                                        ]),
+                                        from: TableRef::Table {
+                                            name: "orders".to_string(),
+                                            alias: None,
+                                        },
+                                        where_clause: None,
+                                        group_by: None,
+                                        order_by: None,
+                                        limit: None,
+                                        offset: None,
+                                    }
+                                )),
+                            },
+                        ]),
+                        distinct: None,
+                        projection: Projections::Specified(vec![
+                            ProjectionsItem {
+                                expr: Expression::Identifier {
+                                    table: None,
+                                    name: "name".to_string(),
+                                },
+                                alias: None,
+                            },
+                            ProjectionsItem {
+                                expr: Expression::Identifier {
+                                    table: None,
+                                    name: "item".to_string(),
+                                },
+                                alias: None,
+                            },
+                        ]),
+                        from: TableRef::Join {
+                            left: Box::new(TableRef::Table {
+                                name: "orders".to_string(),
+                                alias: Some("o".to_string()),
+                            }),
+                            right: Box::new(TableRef::Table {
+                                name: "users".to_string(),
+                                alias: Some("u".to_string()),
+                            }),
+                            join_type: JoinType::Inner,
+                            on: Condition::Comparison(
+                                Equality {
+                                    lhs: Expression::Identifier {
+                                        table: Some("o".to_string()),
+                                        name: "user_id".to_string(),
+                                    },
+                                    rhs: Expression::Identifier {
+                                        table: Some("u".to_string()),
+                                        name: "id".to_string(),
+                                    },
+                                    operator: ComparisonOperator::Eq,
+                                }
+                            ),
+                        },
+                        where_clause: None,
+                        group_by: None,
+                        order_by: None,
+                        limit: None,
+                        offset: None,
+                    }
+                )
+            ]),
+ },
     ];
     assert_parser_expectation(tests);
 }
@@ -607,8 +712,8 @@ fn test_transaction_block() {
                     columns: vec!["id".into(), "name".into()],
                     sub_select: None,
                     values: Some(vec![
-                        Expression::Literal(DataType::Int(1)),
-                        Expression::Literal(DataType::Text("foo".into())),
+                        Expression::Literal{data_type: DataType::Int(1), alias: None},
+                        Expression::Literal{data_type:DataType::Text("foo".into()), alias: None},
                     ]),
                     returning: None,
                 }),
@@ -636,11 +741,7 @@ fn test_transaction_block() {
                                     table: None,
                                     name: "id".into(),
                                 },
-                                rhs: Expression::Literal(
-                                    DataType::Int(
-                                        1,
-                                    ),
-                                ),
+                                rhs: Expression::Literal{data_type:DataType::Int(1), alias: None },
                                 operator: ComparisonOperator::Eq,
                             },
                         ),
