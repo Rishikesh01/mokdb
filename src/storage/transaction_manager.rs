@@ -148,41 +148,25 @@ impl TransactionManager {
         }
     }
 
-    fn conflicting_ancestor_holders(
-        &self,
-        tx_id: u64,
-        resource_id: &ResourceId,
-        requested: LockType,
-    ) -> Vec<u64> {
-        let mut blockers = vec![];
-
-        for ancestor in resource_id.ancestors() {
-            let required_intention = match requested {
-                LockType::ReadLock => LockType::ReadIntent,
-                LockType::Write => LockType::WriteIntent,
-                LockType::ReadIntentWithWriteUpgrade => LockType::WriteIntent,
-                LockType::ReadIntent | LockType::WriteIntent => requested,
-            };
-
-            if let Some(lock_ref) = self.table_level_locks.get(&ancestor) {
-                let lock = lock_ref.value();
-                let state = lock.state.lock();
-
-                if let Some(held_type) = &state.lock_type {
-                    // Skip if this transaction already holds the ancestor lock.
-                    if state.holders.contains(&tx_id) {
-                        continue;
-                    }
-
-                    // If not compatible → all holders are blockers
-                    if !required_intention.compatible_with(held_type) {
-                        blockers.extend(state.holders.iter());
-                    }
-                }
+    fn paths(&self, resource_id: ResourceId) -> Vec<ResourceId> {
+        match resource_id {
+            ResourceId::Index(e) => vec![ResourceId::Index(e)],
+            ResourceId::Table(e) => vec![ResourceId::Table(e)],
+            ResourceId::Page { table, page } => {
+                vec![
+                    ResourceId::Table(table.clone()),
+                    ResourceId::Page { table, page },
+                ]
             }
+            ResourceId::Tuple { table, page, tuple } => vec![
+                ResourceId::Table(table.clone()),
+                ResourceId::Page {
+                    table: table.clone(),
+                    page: page,
+                },
+                ResourceId::Tuple { table, page, tuple },
+            ],
         }
-
-        blockers
     }
 
     fn acquire_current_level(
@@ -191,70 +175,65 @@ impl TransactionManager {
         resource_id: ResourceId,
         requested: LockType,
     ) -> Result<(), MokErrors> {
-        loop {
-            let ancestor_blockers =
-                self.conflicting_ancestor_holders(tx_id, &resource_id, requested);
-            for &holder in &ancestor_blockers {
-                self.wait_graph.add_edge(tx_id, holder);
-            }
-            if !ancestor_blockers.is_empty() {
-                continue;
-            }
+        for path in self.paths(resource_id) {
+            loop {
+                let lock = self
+                    .table_level_locks
+                    .entry(path.clone())
+                    .or_insert(Arc::new(Lock::default()))
+                    .clone();
 
-            let lock = self
-                .table_level_locks
-                .entry(resource_id.clone())
-                .or_insert(Arc::new(Lock::default()))
-                .clone();
-
-            let mut state = lock.state.lock();
-            match state.lock_type {
-                None => {
-                    state.lock_type = Some(requested);
-                    state.holders.insert(tx_id);
-                    return Ok(());
-                }
-
-                Some(held_type) => {
-                    // If this tx already holds the lock → check upgrade possibility
-                    if state.holders.contains(&tx_id) {
-                        if requested.compatible_with(&held_type) {
-                            // Already holds with compatible lock → nothing to do
-                            return Ok(());
-                        }
-
-                        // UPGRADE
-                        // But only allowed if this tx is the sole holder
-                        if state.holders.len() == 1 {
-                            state.lock_type = Some(requested);
-                            return Ok(());
-                        }
-
-                        // Other transactions holding lock → must wait
-                        for holders in state.holders.iter() {
-                            self.wait_graph.add_edge(tx_id, *holders);
-                        }
+                let mut state = lock.state.lock();
+                match state.lock_type {
+                    None => {
+                        state.lock_type = Some(requested);
+                        state.holders.insert(tx_id);
+                        return Ok(());
                     }
 
-                    // Conflicting lock
-                    if !requested.compatible_with(&held_type) {
-                        // enqueue and wait
-                        state.waiters.push_back(Waiters {
-                            transaction_id: tx_id,
-                            lock_type: requested,
-                        });
+                    Some(held_type) => {
+                        // If this tx already holds the lock → check upgrade possibility
+                        if state.holders.contains(&tx_id) {
+                            if requested.compatible_with(&held_type) {
+                                // Already holds with compatible lock → nothing to do
+                                return Ok(());
+                            }
 
-                        // Wait until woken and retry
-                        lock.cond.wait(&mut state);
-                        continue;
+                            // UPGRADE
+                            // But only allowed if this tx is the sole holder
+                            if state.holders.len() == 1 {
+                                state.lock_type = Some(requested);
+                                return Ok(());
+                            }
+
+                            // Other transactions holding lock → must wait
+                            for holders in state.holders.iter() {
+                                self.wait_graph.add_edge(tx_id, *holders);
+                            }
+                        }
+
+                        // Conflicting lock
+                        if !requested.compatible_with(&held_type) {
+                            // enqueue and wait
+                            state.waiters.push_back(Waiters {
+                                transaction_id: tx_id,
+                                lock_type: requested,
+                            });
+
+                            // Wait until woken and retry
+                            lock.cond.wait(&mut state);
+                            continue;
+                        }
+
+                        // Compatible shared lock: allow multiple holders
+                        state.holders.insert(tx_id);
+                        return Ok(());
                     }
-
-                    // Compatible shared lock: allow multiple holders
-                    state.holders.insert(tx_id);
-                    return Ok(());
                 }
             }
         }
+
+        return Ok(());
     }
 
     pub fn begin(self) -> u64 {
